@@ -28,7 +28,13 @@ jobs:
           KELFSERVER_API_ADDRESS: ${{ secrets.KELFSERVER_API_ADDRESS }}
           KELFSERVER_API_KEY: ${{ secrets.KELFSERVER_API_KEY }}
         run: |
-          cmake -B build -DRELEASE=ON
+          if [ -n "$KELFSERVER_API_ADDRESS" ] && [ -n "$KELFSERVER_API_KEY" ]; then
+            echo "KELF signing credentials found, building the full release package"
+            cmake -B build -DRELEASE=ON
+          else
+            echo "No KELF signing credentials configured, building unsigned ELFs only"
+            cmake -B build
+          fi
           cmake --build build
 
       - name: Upload artifacts
@@ -36,8 +42,14 @@ jobs:
         if: steps.make.outcome == 'success'
         with:
           name: artifacts
+          if-no-files-found: warn
           path: |
             build/release/**
+            build/launcher/launcher.elf
+            build/osdmenu/osdmenu.elf
+            build/hosdmenu/hosdmenu.elf
+            build/mbr/osdmbr.elf
+            build/mbr/osdmbr.bin
 
   release:
     needs: [build]

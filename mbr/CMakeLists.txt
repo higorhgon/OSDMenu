@@ -149,7 +149,10 @@ add_custom_command(
 )
 
 # Build KELF if required environment variables are set
-if(DEFINED ENV{KELFSERVER_API_ADDRESS} AND DEFINED ENV{KELFSERVER_API_KEY})
+# DEFINED ENV{} is true even for an empty value (e.g. an unset GitHub Actions
+# secret still sets the env var to ""), so also check the values aren't empty
+if(DEFINED ENV{KELFSERVER_API_ADDRESS} AND DEFINED ENV{KELFSERVER_API_KEY}
+   AND NOT "$ENV{KELFSERVER_API_ADDRESS}" STREQUAL "" AND NOT "$ENV{KELFSERVER_API_KEY}" STREQUAL "")
   add_custom_command(
         TARGET osdmbr POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E env
