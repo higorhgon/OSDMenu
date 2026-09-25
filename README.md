@@ -103,6 +103,7 @@ See the launcher [README](launcher/README.md) for more details.
   - PS2LOGO is patched to always use the disc region
   - OSDSYS disc key check is patched out to fix DVD master discs being detected as "invalid"
 - Integrated Neutrino GSM for disc games and applications
+- Built-in "Jogos" games menu: scans `CD`/`DVD` folders across USB/MX4SIO/MMCE devices and launches titles directly via a user-installed standalone Neutrino, without going through another homebrew's own menu
 - "Unlimited" number of paths for each entry
 - Support for 1080i and 480p (as line-doubled 240p) video modes
 - Support for "protokernel" systems (SCPH-10000, SCPH-15000) ported from Free McBoot 1.9 by reverse-engineering

@@ -110,7 +110,7 @@ DKWDRV and custom payload paths are limited to 49 characters.
 20. `OSDSYS_selected_color` — color of selected menu entry
 21. `OSDSYS_unselected_color` — color of unselected menu entry
 22. `name_OSDSYS_ITEM_???` — menu entry name
-23. `path?_OSDSYS_ITEM_???` — path to ELF. Also supports the following special paths: `cdrom`, `OSDSYS`, `POWEROFF`
+23. `path?_OSDSYS_ITEM_???` — path to ELF. Also supports the following special paths: `cdrom`, `OSDSYS`, `POWEROFF`, `games`
 24. `arg_OSDSYS_ITEM_???` — custom argument to be passed to the ELF. Each argument needs a separate entry.
 
 #### Disc/application launch modifiers
@@ -122,6 +122,16 @@ DKWDRV and custom payload paths are limited to 49 characters.
 30. `ps1drv_use_ps1vn` — will run PS1DRV using the PS1DRV Video Mode Negator
 32. `app_gameid` — if enabled, visual Game ID will be displayed for ELF applications launched from OSDMenu. The ID is generated from the ELF name (up to 11 characters).
 32. `path_DKWDRV_ELF` — custom path to DKWDRV.ELF (exclsuive to OSDMenu). The path **must** be on the memory card or XFROM, the default value is `mc?:/BOOT/DKWDRV.ELF` or `xfrom:/osdmenu/DKWDRV.ELF` when running from XFROM
+
+#### Games menu
+
+Adding an entry with `path1_OSDSYS_ITEM_???` set to `games` opens a built-in list of PS2 games found on USB/MX4SIO/MMCE devices, launched via a user-installed standalone [Neutrino](https://github.com/rickgaiser/neutrino) (`neutrino.elf`, not bundled with OSDMenu). The list is only scanned when this entry is opened — it adds no boot-time cost otherwise. See [launcher/README.md](../launcher/README.md#games-handler) for the full option list, scan rules and current limitations (no cover art, no PS1 support, no network/SMB storage).
+
+These options are read by the **launcher**, not the patcher, so they don't count against the `OSDMENU.CNF` item/character limits described above:
+- `games_device_usb`, `games_device_mx4sio`, `games_device_mmce` — enable/disable scanning each device type (default: all enabled)
+- `games_cd_folder`, `games_dvd_folder` — folder names (relative to each device's root) to scan for games; both hold PS2 titles, split only by original release media (default: `CD`, `DVD`)
+- `games_neutrino_path` — path to the installed `neutrino.elf` (required for the games menu to work)
+- `games_neutrino_arg` — extra argument passed to every launch, repeatable (e.g. `-gsm=fp2` to force a video mode via the existing `-gsm=` launcher flag)
 
 To add a custom separator to the menu, add a `name_OSDSYS_ITEM_???` entry that starts with `$!`.  
 This will make the entry inactive, but still show it in the OSD without the `$!` prefix.

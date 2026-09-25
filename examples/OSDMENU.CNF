@@ -28,6 +28,15 @@ ps1drv_use_ps1vn = 0
 app_gameid = 0
 # path_DKWDRV_ELF = mc?:/BOOT/DKWDRV.ELF
 # --------------------------------------------------
+# Games menu options (read by the launcher, not the patcher — see launcher/README.md)
+# games_device_usb = 1
+# games_device_mx4sio = 1
+# games_device_mmce = 1
+# games_cd_folder = CD
+# games_dvd_folder = DVD
+# games_neutrino_path = mc0:/APPS/NEUTRINO.ELF
+# games_neutrino_arg = -gsm=fp2
+# --------------------------------------------------
 name_OSDSYS_ITEM_1 = Launch Disc
 path1_OSDSYS_ITEM_1 = cdrom
 arg_OSDSYS_ITEM_1 = -nologo
@@ -36,6 +45,9 @@ name_OSDSYS_ITEM_2 = wLaunchELF
 path1_OSDSYS_ITEM_2 = mc?:/BOOT/BOOT.ELF
 path2_OSDSYS_ITEM_2 = mmce?:/apps/wLaunchELF.elf
 path3_OSDSYS_ITEM_2 = usb:/apps/wLaunchELF.elf
+# --------------------------------------------------
+name_OSDSYS_ITEM_3 = Jogos
+path1_OSDSYS_ITEM_3 = games
 # --------------------------------------------------
 name_OSDSYS_ITEM_200 = Shutdown
 path1_OSDSYS_ITEM_200 = POWEROFF

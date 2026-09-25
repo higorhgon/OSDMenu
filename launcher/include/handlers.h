@@ -2,6 +2,9 @@
 #define _HANDLERS_H_
 
 #include "common.h"
+#ifdef LAUNCHER_GAMES_MENU
+#include "handler_games.h"
+#endif
 
 // handler_bdm.c
 //

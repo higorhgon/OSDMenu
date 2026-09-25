@@ -38,6 +38,10 @@ IRX_DEFINE(mcserv);
 IRX_DEFINE(mmceman);
 #endif
 
+#ifdef LAUNCHER_GAMES_MENU
+IRX_DEFINE(padman);
+#endif
+
 #if defined(ATA) || defined(APA)
 #define DEV9
 #define BDM
@@ -145,6 +149,9 @@ static ModuleListEntry moduleList[] = {
     INT_MODULE(mcserv, NULL, Device_Basic),
 #ifdef MMCE
     INT_MODULE(mmceman, NULL, Device_MMCE),
+#endif
+#ifdef LAUNCHER_GAMES_MENU
+    INT_MODULE(padman, NULL, Device_Games),
 #endif
 #ifdef DEV9
     INT_MODULE(ps2dev9, NULL, Device_ATA | Device_UDPBD | Device_APA | Device_UDPFS | Device_XFROM),

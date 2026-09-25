@@ -109,6 +109,16 @@ int handleOSDM(int argc, char *argv[]) {
   int useDKWDRV = 0;
   int ps1drvFlags = 0;
 
+#ifdef LAUNCHER_GAMES_MENU
+  // Games menu configuration, populated below alongside the other global keys
+  GamesConfig gamesCfg = {0};
+  gamesCfg.useUSB = 1;
+  gamesCfg.useMX4SIO = 1;
+  gamesCfg.useMMCE = 1;
+  strcpy(gamesCfg.cdFolder, "CD");
+  strcpy(gamesCfg.dvdFolder, "DVD");
+#endif
+
   // Temporary path and argument lists
   linkedStr *targetPaths = NULL;
   linkedStr *targetArgs = NULL;
@@ -196,6 +206,40 @@ int handleOSDM(int argc, char *argv[]) {
         settings.flags |= FLAG_APP_GAMEID;
       continue;
     }
+#ifdef LAUNCHER_GAMES_MENU
+    if (!strncmp(lineBuffer, "games_device_usb", 16)) {
+      gamesCfg.useUSB = atoi(valuePtr);
+      continue;
+    }
+    if (!strncmp(lineBuffer, "games_device_mx4sio", 19)) {
+      gamesCfg.useMX4SIO = atoi(valuePtr);
+      continue;
+    }
+    if (!strncmp(lineBuffer, "games_device_mmce", 17)) {
+      gamesCfg.useMMCE = atoi(valuePtr);
+      continue;
+    }
+    if (!strncmp(lineBuffer, "games_cd_folder", 15)) {
+      if (strlen(valuePtr) > 0)
+        strncpy(gamesCfg.cdFolder, valuePtr, GAMES_FOLDER_NAME_LEN - 1);
+      continue;
+    }
+    if (!strncmp(lineBuffer, "games_dvd_folder", 16)) {
+      if (strlen(valuePtr) > 0)
+        strncpy(gamesCfg.dvdFolder, valuePtr, GAMES_FOLDER_NAME_LEN - 1);
+      continue;
+    }
+    if (!strncmp(lineBuffer, "games_neutrino_path", 19)) {
+      if (strlen(valuePtr) > 0)
+        gamesCfg.neutrinoPath = strdup(valuePtr);
+      continue;
+    }
+    if (!strncmp(lineBuffer, "games_neutrino_arg", 18)) {
+      if (strlen(valuePtr) > 0)
+        gamesCfg.neutrinoArgs = addStr(gamesCfg.neutrinoArgs, valuePtr);
+      continue;
+    }
+#endif
   }
   fclose(file);
 
@@ -229,6 +273,18 @@ int handleOSDM(int argc, char *argv[]) {
       free(settings.dkwdrvPath);
     shutdownPS2();
   }
+
+#ifdef LAUNCHER_GAMES_MENU
+  // Handle 'games' entry
+  if (!strcmp(targetPaths->str, "games")) {
+    freeLinkedStr(targetPaths);
+    freeLinkedStr(targetArgs);
+    if (settings.dkwdrvPath)
+      free(settings.dkwdrvPath);
+
+    return handleGames(&gamesCfg);
+  }
+#endif
 
   // Build argv, freeing targetArgs
   char **targetArgv = malloc(targetArgc * sizeof(char *));

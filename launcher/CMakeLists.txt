@@ -12,6 +12,7 @@ option(LAUNCHER_ILINK "Support for loading ELFs from iLink" OFF)
 option(LAUNCHER_UDPBD "Support for loading ELFs from UDPBD" OFF)
 option(LAUNCHER_UDPFS "Support for loading ELFs from UDPFS" OFF)
 option(LAUNCHER_XFROM "Support for loading ELFs from XFROM" ON)
+option(LAUNCHER_GAMES_MENU "Support for the built-in Jogos games menu (scans CD/DVD folders, launches via neutrino.elf)" ON)
 
 # Base sources
 set(EE_SOURCES
@@ -73,6 +74,13 @@ if(LAUNCHER_OSDM)
   list(APPEND IRX_FILES poweroff.irx)
   add_compile_definitions(OSDM)
   set(LAUNCHER_CDROM ON)  # OSDM implies CDROM
+endif()
+
+# Games menu support (depends on OSDM for the special 'games' path dispatch)
+if(LAUNCHER_GAMES_MENU)
+  list(APPEND EE_SOURCES src/handler_games.c)
+  list(APPEND IRX_FILES padman.irx)
+  add_compile_definitions(LAUNCHER_GAMES_MENU)
 endif()
 
 # MMCE support
@@ -300,7 +308,7 @@ target_link_options(launcher_unc PRIVATE
     -T$ENV{PS2SDK}/ee/startup/linkfile
 )
 
-link_newlib_nano(launcher_unc
+set(LAUNCHER_LINK_LIBS
     cdvd
     patches
     kernel
@@ -311,6 +319,13 @@ link_newlib_nano(launcher_unc
     mc
     poweroff
     secr
+)
+if(LAUNCHER_GAMES_MENU)
+  list(APPEND LAUNCHER_LINK_LIBS pad)
+endif()
+
+link_newlib_nano(launcher_unc
+    ${LAUNCHER_LINK_LIBS}
     cglue
     pthread
     pthreadglue

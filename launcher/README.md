@@ -17,6 +17,7 @@ Supported paths are:
 - `xfrom:` — XFROM (PSX)
 - `cdrom` — CD/DVD discs
 - `osdm` — special path for OSDMenu patcher
+- `games` — special path for the built-in games menu (see [`games` handler](#games-handler))
 
 Device support can be enabled and disabled by changing build-time configuration options (see [Makefile](Makefile))  
 Supports [OSDMenu-specific SYSTEM.CNF extensions](../mbr/README.md#systemcnf-extensions-for-partition-attribute-area-patinfo-paths).
@@ -71,6 +72,42 @@ searches for `path?_OSDSYS_ITEM_<idx>` and `arg_OSDSYS_ITEM_<idx>` entries and a
 Additionally, the launcher supports parsing the configuration from an arbitrary address when receiving `osdm:a<address>:<CNF file size>:<idx>` as `argv[0]`.
 
 Respects `cdrom_skip_ps2logo`, `cdrom_disable_gameid` and `cdrom_use_dkwdrv` for `cdrom` paths, but only if there are no custom arguments for this entry (`arg_OSDSYS_ITEM`).
+
+### `games` handler
+When the launcher receives `games` as `argv[0]` (via the `osdm` handler's special path resolution), it shows a
+built-in, full-screen list of PS2 games, drawn by the launcher itself (not OPL's or Neutrino's own UI), and launches
+the selected title via a user-installed standalone [Neutrino](https://github.com/rickgaiser/neutrino) (`neutrino.elf`,
+not bundled with OSDMenu).
+
+The scan only runs when this entry is opened — it adds no cost to normal boot.
+
+For each enabled device (`games_device_usb`, `games_device_mx4sio`, `games_device_mmce` in `OSDMENU.CNF`, all
+enabled by default), it scans two folders relative to the device root: `games_cd_folder` (default `CD`) and
+`games_dvd_folder` (default `DVD`). Both hold **PS2** games — the split is only about the original release media
+(e.g. Bloody Roar 3, Crash Bandicoot: The Wrath of Cortex and Harvest Moon: Save the Homeland were released on CD;
+most other PS2 titles were released on DVD), not a PS1/PS2 distinction.
+
+A game is either:
+- a `.iso` file directly inside the folder (display name = file name), or
+- a subfolder containing **exactly one** `.iso` file (display name = subfolder name). Zero or more than one `.iso`
+  in a subfolder is treated as ambiguous and skipped.
+
+ISO images split into multiple part files (e.g. `game.iso.0`/`game.iso.1`) are not supported — this matches a
+limitation of Neutrino itself, which has no documented support for split images.
+
+Selecting a game launches `games_neutrino_path` (required) with:
+```
+neutrino.elf -dvd=<usb|mx4sio|mmce>:<path relative to the device root> -qb [games_neutrino_arg ...]
+```
+`-qb` boots straight into the game, without showing Neutrino's own menu. `games_neutrino_arg` (repeatable) appends
+extra static arguments to every launch, e.g. `-gsm=fp2` to force a video mode.
+
+Triangle or Circle exits back to the OSDSYS clock at any time.
+
+**Current limitations** (see the [root README](../README.md) and project planning notes for details): no cover art
+(the OSDSYS custom menu format this entry lives in has no per-item icon), no PS1 support (evaluated DKWDRV, but it
+has no direct ISO launch argument and USB loading is DECKARD-only beta), and no network storage (SMB/FTP/SFTP) —
+Neutrino's own backing store drivers only cover `ata`/`usb`/`mx4sio`/`ilink`/`mmce`/`udpbd`.
 
 ### Config handler
 When the launcher receives a path that ends with `.CNF`, `.cnf`, `.CFG` or `.cfg`,

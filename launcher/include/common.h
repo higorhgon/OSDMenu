@@ -31,6 +31,7 @@ typedef enum {
   //
   Device_XFROM = (1 << 12),
   Device_Optional = (1 << 13), // Marks that the module is not required for the launcher to work properly
+  Device_Games = (1 << 14),    // Marks modules needed only by the games menu (currently just padman)
 } DeviceType;
 
 typedef enum {
