@@ -116,7 +116,8 @@ See the launcher [README](launcher/README.md) for more details.
 
 ## Configuration
 
-Comment out lines in config files by prefixing them with `#`.
+Comment out lines in config files by prefixing them with `#`. Comments must be on their own line.  
+For a step-by-step setup of the games menus, network games and menu groups, see the [tutorial](#tutorial-games-menus-network-games-and-menu-groups).
 
 ### R3CONFIGURATOR
 
@@ -139,6 +140,173 @@ See the MBR [README](mbr/README.md) for more details.
 
 OSDMenu comes with the fully-featured launcher that supports running applications from all devices supported by homebrew drivers.  
 See the launcher [README](launcher/README.md) for more details.
+
+
+## Tutorial: games menus, network games and menu groups
+
+This walkthrough sets up OSDMenu with the "Games >" and "PSX >" submenus, network games and menu groups.
+Every part is optional: enable only the devices and features you use.
+
+### 1. What to download
+
+| Project | Needed for | Where to get it |
+|---|---|---|
+| OSDMenu | Everything | `osdmenu.elf` from the release or the CI build artifacts |
+| [Neutrino](https://github.com/rickgaiser/neutrino/releases) | PS2 games (default launcher), UDPFS games | The **latest development build**: v1.8.0 hangs on MMCE ISOs with digits in their names |
+| RiptOPL with argv autolaunch ([fork](https://github.com/higorhgon/Open-PS2-Loader)) | `games_launcher = opl`, MMCE/SMB games through OPL, IGR | `OPL-OFFICIALPINNED` artifact of the `build-flavours` workflow. Upstream [RiptOPL](https://github.com/NathanNeurotic/Open-PS2-Loader) only supports the `bdm` autolaunch mode |
+| [Ember](https://github.com/Gageformer/Ember) | PS1 games ("PSX >") | Release archive |
+| Neutrino's `pc/udpfs_server.py` | UDPFS network games | [Neutrino repository](https://github.com/rickgaiser/neutrino/tree/master/pc) (needs Python 3) |
+| An SMB1 share (Samba or Windows) | SMB network games | Samba with `server min protocol = NT1`, or Windows with the "SMB 1.0/CIFS" feature enabled |
+| [wLaunchELF](https://github.com/ps2homebrew/wLaunchELF) _(optional)_ | Copying files to the memory card | Release archive |
+
+OSDMenu itself must be started by something: PS2BBL, the System Update (see [above](#osdmenu-as-the-system-update)),
+or the boot card of an MMCE device such as the PSXMemcard GEN2 (`BOOT/BOOT.ELF`).
+
+### 2. File structure
+
+The paths below match the example config in the next step. Folder names can be changed in `OSDMENU.CNF`.
+
+**Memory card** (`mc0:`, or the MMCE boot card):
+```
+mc0:/
+├── BOOT/
+│   └── BOOT.ELF              ← osdmenu.elf (or mc?:/BOOT/osdmenu.elf, started by PS2BBL)
+└── SYS-CONF/
+    ├── OSDMENU.CNF           ← your config (see examples/OSDMENU.CNF)
+    ├── IPCONFIG.DAT          ← optional: PS2 IP address for UDPFS ("192.168.1.10 255.255.255.0 192.168.1.1")
+    ├── OSDGAMES.CNF          ← created by "Refresh list" (PS2 games cache)
+    └── OSDPSX.CNF            ← created by "Refresh list" (PS1 games cache)
+```
+
+**Storage device** (MMCE SD card `mmce0:`/`mmce1:`, USB `mass0:` or MX4SIO `mx4sio0:`):
+```
+mmce0:/
+├── APPS/
+│   ├── neutrino/             ← the whole Neutrino release folder, not just the ELF
+│   │   ├── neutrino.elf
+│   │   ├── config/
+│   │   └── modules/
+│   └── OPL/                  ← RiptOPL and its settings (conf_opl.cfg, conf_network.cfg)
+│       └── RIPTOPL.ELF
+├── CD/                       ← PS2 games released on CD
+│   └── SLUS_202.12.Bloody Roar 3.iso
+├── DVD/                      ← PS2 games released on DVD
+│   ├── Shadow of the Colossus.iso
+│   └── Final Fantasy XII/    ← a folder with exactly one ISO also works (Neutrino only)
+│       └── SLUS_214.61.iso
+├── EMBER/                    ← PS1 games
+│   ├── ember.elf
+│   └── games/
+│       └── Crash Bandicoot/  ← one folder per game, name shown in the menu
+│           ├── Crash Bandicoot.cue
+│           └── Crash Bandicoot.bin
+└── MemoryCards/PS2/<ID>/     ← created by the MMCE for per-game memory cards
+```
+
+- `CD/` and `DVD/` both hold **PS2** games. The split only follows the original release media, like in OPL.
+- A title ID in the file name (`SLUS_202.12.Name.iso`) is hidden in the menu. Without it, the ID is read from the ISO.
+- OPL needs the ISO directly in `CD/` or `DVD/` and a title ID. Other games fall back to Neutrino.
+
+**Network share** (UDPFS folder or SMB share), same layout as a storage device:
+```
+<share>/                      ← or <share>/<eth_prefix>/ for SMB when OPL's ETH prefix is set
+├── CD/
+└── DVD/
+```
+
+### 3. Configure `OSDMENU.CNF`
+
+**PS2 games from MMCE, launched with Neutrino:**
+```ini
+games_device_mmce = 1
+games_neutrino_path = mmce0:/APPS/neutrino/neutrino.elf
+# Optional: Neutrino arguments for every game (PS2 logo, video mode)
+games_neutrino_arg = -logo
+```
+
+**Launch with RiptOPL instead**: OPL handles IGR (L1+L2+R1+R2+Start+Select) and switches the MMCE back to the boot card.
+Set RiptOPL's IGR Path (General & System) to the path of OSDMenu, e.g. `mc0:/BOOT/BOOT.ELF`.
+```ini
+games_launcher = opl
+games_opl_path = mmce0:/APPS/OPL/RIPTOPL.ELF
+# Neutrino is still used for the games OPL can't autolaunch
+games_neutrino_path = mmce0:/APPS/neutrino/neutrino.elf
+```
+
+**PS1 games with Ember:**
+```ini
+psx_device_mmce = 1
+```
+
+**Network games**: the PS2 needs a network adapter (built into slim consoles).
+```ini
+# UDPFS server, games launched with Neutrino
+games_device_udpfs = 1
+# SMB share configured in RiptOPL's network settings, games launched with RiptOPL
+games_device_smb = 1
+games_opl_path = mmce0:/APPS/OPL/RIPTOPL.ELF
+# Only needed when conf_network.cfg is not next to games_opl_path or in mc?:/OPL/
+# games_smb_config = mmce0:/APPS/OPL/conf_network.cfg
+```
+- **UDPFS**: run the server on the PC, pointed at the folder that holds `CD/` and `DVD/`:
+  ```
+  python udpfs_server.py -d /path/to/ps2games
+  ```
+  The PS2 IP address comes from `IPCONFIG.DAT`, or from OPL's static IP setting when it doesn't exist.
+  Also set the same address in Neutrino's `config/bsd-udpfs.toml` (`ip=...`), which Neutrino uses in-game.
+- **SMB**: configure the share once in RiptOPL (Network Settings: PS2 IP or DHCP, server IP, share, user, password)
+  and OSDMenu reads the same settings. The server must be set by IP address, not by NetBIOS name.
+
+**Menu groups**: move entries into submenus with `group_OSDSYS_ITEM_???`. Every entry needs its own index:
+```ini
+name_OSDSYS_ITEM_2 = RiptOPL
+path1_OSDSYS_ITEM_2 = mmce0:/APPS/OPL/RIPTOPL.ELF
+group_OSDSYS_ITEM_2 = Apps
+
+name_OSDSYS_ITEM_3 = wLaunchELF
+path1_OSDSYS_ITEM_3 = mc?:/BOOT/WLE.ELF
+group_OSDSYS_ITEM_3 = Apps
+
+name_OSDSYS_ITEM_10 = DKWDRV
+path1_OSDSYS_ITEM_10 = mc?:/BOOT/DKWDRV.ELF
+group_OSDSYS_ITEM_10 = PS1 Tools
+
+name_OSDSYS_ITEM_200 = Shutdown
+path1_OSDSYS_ITEM_200 = POWEROFF
+```
+This results in the following menu:
+```
+Games >
+PSX >
+Apps >        → < Back, RiptOPL, wLaunchELF
+PS1 Tools >   → < Back, DKWDRV
+Shutdown
+```
+
+### 4. Using the menus
+
+1. Open "Games >" (or "PSX >"). The first time, the devices are scanned and OSDMenu restarts with the submenu open.
+2. Select a game with X. After adding or removing games, select "Refresh list" at the bottom of the submenu.
+
+| Button | Action in a submenu |
+|---|---|
+| X | Launch the game or entry |
+| Circle / Triangle / "< Back" | Back to the main menu |
+| Square | Sort games by name `[A-Z]` or by recently played `[Recent]` (games submenus) |
+| Left / Right | Previous / next page |
+
+### 5. Troubleshooting
+
+- **No games found**: the scan screen lists every device and folder it tried, with the number of entries it saw and
+  the network errors, if any. Check the `games_device_*` keys and the folder names.
+- **Black screen when launching from MMCE**: use Neutrino's latest development build instead of v1.8.0.
+- **"Refresh list" or a failed launch boots the Sony OSD**: set `games_return_path` to the path OSDMenu is started from.
+- **IGR opens the memory card browser**: set RiptOPL's IGR Path to the path OSDMenu is started from.
+- **SMB game doesn't start**: the game needs a title ID and must be directly in `CD/` or `DVD/`, and RiptOPL must be a
+  build with SMB autolaunch support.
+
+See the [patcher README](patcher/README.md#games-menu) for all options and the
+[launcher README](launcher/README.md#games-handler) for the scan rules and launch arguments.
   
 ## Credits
 
