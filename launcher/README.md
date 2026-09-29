@@ -113,6 +113,11 @@ Selecting a game launches `games_neutrino_path` (required) the same way [NHDDL](
 neutrino.elf -bsd=<usb|mx4sio|mmce> -dvd=<full ISO path, e.g. mmce0:/DVD/game.iso> -qb [games_neutrino_arg ...]
 ```
 
+**Neutrino v1.8.0 and MMCE**: v1.8.0 takes the MMCE slot from the *last* digit anywhere in the ISO path instead of
+the one before `:`, so ISOs with digits in their name (e.g. `Bloody Roar 3.iso`) hang on a black screen when loaded
+from MMCE. This was fixed upstream after v1.8.0 (commit `cedc060`, "FIX MMCE"). Use the "Latest development build"
+or v1.7.0 instead.
+
 **Current limitations**: no cover art (the OSDSYS custom menu has no per-item icon), no PS1 support (DKWDRV has no
 direct ISO launch argument), and no network storage (SMB/FTP/SFTP), which Neutrino doesn't support.
 
