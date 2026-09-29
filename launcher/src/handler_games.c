@@ -3,6 +3,7 @@
 #include "handler_games.h"
 #include "handlers.h"
 #include "init.h"
+#include <ctype.h>
 #include <debug.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -101,6 +102,22 @@ typedef struct {
 static GamesScanDiag scanDiag[GAMES_MAX_DIAG];
 static int scanDiagCount = 0;
 
+// Copies src into out, dropping a trailing ".iso" and a leading OPL-style
+// title ID prefix ("SLUS_202.12." in "SLUS_202.12.BLOODY ROAR 3.iso")
+static void makeDisplayName(const char *src, char *out, size_t outSize) {
+  if (strlen(src) > 12 && isalpha((int)src[0]) && isalpha((int)src[1]) && isalpha((int)src[2]) && isalpha((int)src[3]) && src[4] == '_' &&
+      isdigit((int)src[5]) && isdigit((int)src[6]) && isdigit((int)src[7]) && src[8] == '.' && isdigit((int)src[9]) &&
+      isdigit((int)src[10]) && src[11] == '.')
+    src += 12;
+
+  strncpy(out, src, outSize - 1);
+  out[outSize - 1] = '\0';
+
+  char *ext = strrchr(out, '.');
+  if (ext && !strcasecmp(ext, ".iso") && ext != out)
+    *ext = '\0';
+}
+
 // Adds a game to the in-memory list if there's room left
 static void addGameEntry(const char *relDir, const char *isoName, const char *displayName, GameMediaType media,
                           const char *neutrinoDriver) {
@@ -110,8 +127,7 @@ static void addGameEntry(const char *relDir, const char *isoName, const char *di
   }
 
   GameEntry *g = &gameList[gameCount];
-  strncpy(g->name, displayName, GAMES_NAME_LEN - 1);
-  g->name[GAMES_NAME_LEN - 1] = '\0';
+  makeDisplayName(displayName, g->name, GAMES_NAME_LEN);
 
   snprintf(g->relPath, GAMES_REL_PATH_LEN, "%s/%s", relDir, isoName);
   g->neutrinoDriver = neutrinoDriver;
@@ -244,9 +260,9 @@ static void scanAllDevices(GamesConfig *cfg) {
         if (attempts > 0)
           sleep(1);
       }
-      if (!diag->available)
-        continue;
-
+      // The root probe above only gives BDM devices time to settle; still try
+      // the folders when it fails, since not every driver necessarily accepts
+      // O_DIRECTORY on a bare "<device>:" root (handleMMCE never probes it)
       diag->cdOpened = scanFolder(diag->mountpoint, cfg->cdFolder, GameMedia_CD, dev->neutrinoDriver, &diag->cdEntries);
       diag->dvdOpened = scanFolder(diag->mountpoint, cfg->dvdFolder, GameMedia_DVD, dev->neutrinoDriver, &diag->dvdEntries);
     }
@@ -265,7 +281,7 @@ static void printScanDiagnostics(GamesConfig *cfg) {
   }
   for (int i = 0; i < scanDiagCount; i++) {
     GamesScanDiag *d = &scanDiag[i];
-    if (!d->available) {
+    if (!d->available && !d->cdOpened && !d->dvdOpened) {
       scr_printf(" %s nao respondeu (dispositivo ausente/nao pronto)\n", d->mountpoint);
       continue;
     }
@@ -440,7 +456,12 @@ int handleGames(GamesConfig *cfg) {
     return -EINVAL;
   }
 
-  DeviceType scanMask = Device_Basic | Device_Games; // Device_Games loads padman
+  // Device_Basic must not be in this mask: handleOSDM() has already loaded
+  // Device_Basic | Device_CDROM, and initModules() returns early if *any* bit
+  // of the requested mask is already loaded, which would skip loading the
+  // storage drivers and padman entirely. Basic modules are always reloaded
+  // on every IOP reset anyway.
+  DeviceType scanMask = Device_Games; // Device_Games loads padman
 #ifdef USB
   if (cfg->useUSB)
     scanMask |= Device_USB;
