@@ -125,7 +125,7 @@ DKWDRV and custom payload paths are limited to 49 characters.
 
 #### Games menu
 
-Enabling any of the `games_device_*` options adds a "Games >" entry at the top of the custom menu. It opens a submenu with PS2 games found on USB/MX4SIO/MMCE devices, launched via a user-installed standalone [Neutrino](https://github.com/rickgaiser/neutrino) (`neutrino.elf`, not bundled with OSDMenu). The list is cached in `mc?:/SYS-CONF/OSDGAMES.CNF` and only rescanned when it doesn't exist yet or when "Refresh list" is selected, so it adds no boot-time cost beyond reading that file. "< Back" returns to the main menu. HOSDMenu shows a full-screen list from the launcher instead. The entry is not shown by builds without the games menu (`LAUNCHER_GAMES_MENU`). See [launcher/README.md](../launcher/README.md#games-handler) for scan rules and current limitations (no cover art, no network/SMB storage).
+Enabling any of the `games_device_*` options adds a "Games >" entry at the top of the custom menu. It opens a submenu with PS2 games found on USB/MX4SIO/MMCE devices, launched via a user-installed standalone [Neutrino](https://github.com/rickgaiser/neutrino) (`neutrino.elf`, not bundled with OSDMenu). The list is cached in `mc?:/SYS-CONF/OSDGAMES.CNF` and only rescanned when it doesn't exist yet or when "Refresh list" is selected, so it adds no boot-time cost beyond reading that file. "< Back" returns to the main menu. HOSDMenu shows a full-screen list from the launcher instead. The entry is not shown by builds without the games menu (`LAUNCHER_GAMES_MENU`). See [launcher/README.md](../launcher/README.md#games-handler) for scan rules and current limitations (no cover art).
 
 Enabling any of the `psx_device_*` options adds a "PSX >" entry right below "Games >". It works the same way for PS1 games,
 launched via [Ember](https://github.com/Gageformer/Ember) (not bundled with OSDMenu) and cached in `mc?:/SYS-CONF/OSDPSX.CNF`.
@@ -146,6 +146,9 @@ only the texts are shown. `games_button_debug = 1` adds the icon types to the "S
 
 These options are also read by the **launcher**:
 - `games_device_usb`, `games_device_mx4sio`, `games_device_mmce` — enable scanning each device type (default: all disabled)
+- `games_device_udpfs` — enable scanning the [UDPFS](https://github.com/rickgaiser/neutrino#udpfs--udpbd-pc-server) server over the network adapter; games are launched via Neutrino (`-bsd=udpfs`)
+- `games_device_smb` — enable scanning the SMB share configured in OPL's network settings; games are launched via `games_opl_path`, which needs a RiptOPL build with SMB autolaunch support
+- `games_smb_config` — path to OPL's `conf_network.cfg`. When not set, it's looked up next to `games_opl_path`, then in `mc?:/OPL/`
 - `games_cd_folder`, `games_dvd_folder` — folder names (relative to each device's root) to scan for games; both hold PS2 titles, split only by original release media (default: `CD`, `DVD`)
 - `games_neutrino_path` — path to the installed `neutrino.elf` (required to launch games)
 - `games_neutrino_arg` — extra Neutrino argument passed to every launch, repeatable (e.g. `-gsm=fp2`)

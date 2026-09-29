@@ -6,7 +6,7 @@
 #define GAMES_FOLDER_NAME_LEN 32
 
 // Settings parsed from OSDMENU.CNF by handler_osdm.c, consumed by handleGames().
-// neutrinoPath, neutrinoArgs, returnPath and oplPath are heap-allocated and owned by the caller.
+// neutrinoPath, neutrinoArgs, returnPath, oplPath and smbConfigPath are heap-allocated and owned by the caller.
 typedef enum {
   GamesKind_PS2, // PS2 games from the CD/DVD folders, launched via Neutrino or OPL
   GamesKind_PSX, // PS1 games from EMBER/games, launched via Ember
@@ -20,6 +20,9 @@ typedef struct {
   int useUSB;
   int useMX4SIO;
   int useMMCE;
+  int useUDPFS;                          // UDPFS server, games launched via Neutrino
+  int useSMB;                            // SMB share configured in OPL, games launched via OPL
+  char *smbConfigPath;                   // OPL's conf_network.cfg, found automatically when not set
   char cdFolder[GAMES_FOLDER_NAME_LEN];  // PS2 titles released on CD media
   char dvdFolder[GAMES_FOLDER_NAME_LEN]; // PS2 titles released on DVD media
   char *neutrinoPath;                    // Path to the user-installed neutrino.elf
@@ -33,7 +36,7 @@ typedef struct {
 // handler_games.c
 //
 // osdmArg is the osdm path that led here. The patcher appends a mode suffix:
-//   ":s"  - scan the enabled devices (USB/MX4SIO/MMCE), write the cache
+//   ":s"  - scan the enabled devices (USB/MX4SIO/MMCE/UDPFS/SMB), write the cache
 //           (GAMES_CACHE_PATH or PSX_CACHE_PATH) and return to OSDMenu
 //   ":gN" - launch game N from the cache without scanning
 // PS2 games come from the CD/DVD folders and run via Neutrino or OPL,

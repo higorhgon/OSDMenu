@@ -76,6 +76,15 @@ IRX_DEFINE(udpbd);
 IRX_DEFINE(udpfs_ioman);
 #endif
 
+#ifdef SMB
+#define DEV9
+IRX_DEFINE(netman);
+IRX_DEFINE(netman_smap);
+IRX_DEFINE(ps2ip_nm);
+IRX_DEFINE(ps2ips);
+IRX_DEFINE(smbman);
+#endif
+
 #ifdef XFROM
 #define DEV9
 IRX_DEFINE(extflash);
@@ -134,6 +143,7 @@ typedef struct ModuleListEntry {
 
 // Argument functions
 char *initSMAPArguments(uint32_t *argLength);
+char *initPS2IPArguments(uint32_t *argLength);
 char *initPS2HDDArguments(uint32_t *argLength);
 char *initPS2FSArguments(uint32_t *argLength);
 
@@ -154,7 +164,7 @@ static ModuleListEntry moduleList[] = {
     INT_MODULE(padman, NULL, Device_Games),
 #endif
 #ifdef DEV9
-    INT_MODULE(ps2dev9, NULL, Device_ATA | Device_UDPBD | Device_APA | Device_UDPFS | Device_XFROM),
+    INT_MODULE(ps2dev9, NULL, Device_ATA | Device_UDPBD | Device_APA | Device_UDPFS | Device_XFROM | Device_SMB),
 #endif
 #ifdef XFROM
     INT_MODULE(extflash, NULL, Device_XFROM),
@@ -166,6 +176,13 @@ static ModuleListEntry moduleList[] = {
 #endif
 #ifdef UDPFS
     INT_MODULE(udpfs_ioman, NULL, Device_UDPFS),
+#endif
+#ifdef SMB
+    INT_MODULE(netman, NULL, Device_SMB),
+    INT_MODULE(netman_smap, NULL, Device_SMB),
+    INT_MODULE(ps2ip_nm, &initPS2IPArguments, Device_SMB),
+    INT_MODULE(ps2ips, NULL, Device_SMB),
+    INT_MODULE(smbman, NULL, Device_SMB),
 #endif
 #ifdef BDM
     INT_MODULE(bdm, NULL, Device_BDM | Device_APA),
@@ -317,15 +334,80 @@ void applyXPARAM(char *gameID) { SifExecModuleBuffer(xparam_irx, size_xparam_irx
 #endif
 
 // Argument functions
+#if defined(UDPFS) || defined(SMB)
+OPLNetConfig oplNetConfig;
+int oplNetConfigLoaded = 0;
+
+// Copies the value of a "key=value" line into out if the key matches
+static int getConfigValue(const char *line, const char *key, char *out, size_t outSize) {
+  size_t keyLen = strlen(key);
+  if (strncmp(line, key, keyLen) || (line[keyLen] != '='))
+    return 0;
+
+  snprintf(out, outSize, "%s", line + keyLen + 1);
+  out[strcspn(out, "\r\n")] = '\0';
+  return 1;
+}
+
+// Reads the network settings from OPL's conf_network.cfg (configPath) and
+// the ETH prefix from conf_opl.cfg in the same folder
+int readOPLNetConfig(const char *configPath) {
+  FILE *file = fopen(configPath, "r");
+  if (!file)
+    return -ENOENT;
+
+  OPLNetConfig *c = &oplNetConfig;
+  memset(c, 0, sizeof(*c));
+  strcpy(c->netmask, "255.255.255.0");
+  c->smbPort = 445;
+
+  char line[128];
+  char value[16];
+  while (fgets(line, sizeof(line), file)) {
+    if (getConfigValue(line, "ps2_ip_use_dhcp", value, sizeof(value)))
+      c->dhcp = atoi(value);
+    else if (getConfigValue(line, "smb_share_use_nbns", value, sizeof(value)))
+      c->useNBNS = atoi(value);
+    else if (getConfigValue(line, "smb_port", value, sizeof(value)))
+      c->smbPort = atoi(value);
+    else if (!getConfigValue(line, "ps2_ip_addr", c->ip, sizeof(c->ip)) && !getConfigValue(line, "ps2_netmask", c->netmask, sizeof(c->netmask)) &&
+             !getConfigValue(line, "ps2_gateway", c->gateway, sizeof(c->gateway)) && !getConfigValue(line, "smb_ip", c->smbIP, sizeof(c->smbIP)) &&
+             !getConfigValue(line, "smb_share", c->smbShare, sizeof(c->smbShare)) &&
+             !getConfigValue(line, "smb_user", c->smbUser, sizeof(c->smbUser)))
+      getConfigValue(line, "smb_pass", c->smbPass, sizeof(c->smbPass));
+  }
+  fclose(file);
+
+  // The games folder prefix is stored in the main OPL settings file
+  char oplPath[256];
+  snprintf(oplPath, sizeof(oplPath), "%s", configPath);
+  char *slash = strrchr(oplPath, '/');
+  if (!slash)
+    slash = strchr(oplPath, ':');
+  if (slash && ((slash - oplPath) < (int)(sizeof(oplPath) - 16))) {
+    strcpy(slash + 1, "conf_opl.cfg");
+    if ((file = fopen(oplPath, "r"))) {
+      while (fgets(line, sizeof(line), file))
+        getConfigValue(line, "eth_prefix", c->ethPrefix, sizeof(c->ethPrefix));
+      fclose(file);
+    }
+  }
+
+  oplNetConfigLoaded = 1;
+  return 0;
+}
+#endif
+
 #if defined(UDPBD) || defined(UDPFS)
 // Builds IP address argument for SMAP module
-// using mc?:SYS-CONF/IPCONFIG.DAT from memory card
+// using mc?:SYS-CONF/IPCONFIG.DAT from memory card,
+// or the static PS2 IP address from OPL's network settings when it doesn't exist
 char *initSMAPArguments(uint32_t *argLength) {
   // Try to get IP from IPCONFIG.DAT
   // The 'X' in "mcX" will be replaced with memory card number
   static char ipconfigPath[] = "mcX:/SYS-CONF/IPCONFIG.DAT";
 
-  int ipconfigFd, count;
+  int ipconfigFd, count = 0;
   char ipAddr[16]; // IP address will not be longer than 15 characters
   for (char i = '0'; i < '2'; i++) {
     ipconfigPath[2] = i;
@@ -338,23 +420,61 @@ char *initSMAPArguments(uint32_t *argLength) {
     }
   }
 
-  if ((ipconfigFd < 0) || (count < sizeof(ipAddr) - 1)) {
+  if ((ipconfigFd >= 0) && (count >= sizeof(ipAddr) - 1)) {
+    count = 0; // Reuse count as line index
+    // In case IP address is shorter than 15 chars
+    while (!isspace((unsigned char)ipAddr[count])) {
+      // Advance index until we read a whitespace character
+      count++;
+    }
+    ipAddr[count] = '\0';
+  } else {
+#ifdef UDPFS
+    static char oplConfigPath[] = "mcX:/OPL/conf_network.cfg";
+    for (char i = '0'; !oplNetConfigLoaded && (i < '2'); i++) {
+      oplConfigPath[2] = i;
+      readOPLNetConfig(oplConfigPath);
+    }
+    if (!oplNetConfigLoaded || !oplNetConfig.ip[0]) {
+      msg("ERROR: Failed to read IP address from IPCONFIG.DAT or OPL/conf_network.cfg\n");
+      return NULL;
+    }
+    strcpy(ipAddr, oplNetConfig.ip);
+#else
     msg("ERROR: Failed to read IP address from IPCONFIG.DAT\n");
     return NULL;
+#endif
   }
-
-  count = 0; // Reuse count as line index
-  // In case IP address is shorter than 15 chars
-  while (!isspace((unsigned char)ipAddr[count])) {
-    // Advance index until we read a whitespace character
-    count++;
-  }
-  ipAddr[count] = '\0';
 
   char ipArg[19]; // 15 bytes for IP string + 3 bytes for 'ip='
   *argLength = 19;
   char *argStr = calloc(sizeof(char), 19);
   snprintf(argStr, sizeof(ipArg), "ip=%s", ipAddr);
+  return argStr;
+}
+#endif
+
+#ifdef SMB
+// Builds the "<IP> <netmask> <gateway>" arguments for ps2ip-nm from OPL's network settings.
+// With DHCP, a dummy address is used until DHCP is enabled via ps2ip_setconfig()
+char *initPS2IPArguments(uint32_t *argLength) {
+  if (!oplNetConfigLoaded)
+    return NULL;
+
+  const char *ip = oplNetConfig.ip;
+  const char *netmask = oplNetConfig.netmask;
+  const char *gateway = oplNetConfig.gateway[0] ? oplNetConfig.gateway : "0.0.0.0";
+  if (oplNetConfig.dhcp || !ip[0]) {
+    ip = "169.254.0.1";
+    netmask = "255.255.0.0";
+    gateway = "0.0.0.0";
+  }
+
+  *argLength = strlen(ip) + strlen(netmask) + strlen(gateway) + 3;
+  char *argStr = calloc(sizeof(char), *argLength);
+  strcpy(argStr, ip);
+  strcpy(argStr + strlen(ip) + 1, netmask);
+  strcpy(argStr + strlen(ip) + strlen(netmask) + 2, gateway);
   return argStr;
 }
 #endif

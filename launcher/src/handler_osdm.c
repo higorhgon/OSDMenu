@@ -219,6 +219,19 @@ int handleOSDM(int argc, char *argv[]) {
       gamesCfg.useMMCE = atoi(valuePtr);
       continue;
     }
+    if (!strncmp(lineBuffer, "games_device_udpfs", 18)) {
+      gamesCfg.useUDPFS = atoi(valuePtr);
+      continue;
+    }
+    if (!strncmp(lineBuffer, "games_device_smb", 16)) {
+      gamesCfg.useSMB = atoi(valuePtr);
+      continue;
+    }
+    if (!strncmp(lineBuffer, "games_smb_config", 16)) {
+      if (strlen(valuePtr) > 0)
+        gamesCfg.smbConfigPath = strdup(valuePtr);
+      continue;
+    }
     if (!strncmp(lineBuffer, "games_cd_folder", 15)) {
       if (strlen(valuePtr) > 0)
         strncpy(gamesCfg.cdFolder, valuePtr, GAMES_FOLDER_NAME_LEN - 1);

@@ -10,9 +10,10 @@ option(LAUNCHER_APA "Support for loading ELFs from APA-formatted HDD" ON)
 option(LAUNCHER_CDROM "Support for loading PS1 and PS2 CDs/DVDs" ON)
 option(LAUNCHER_ILINK "Support for loading ELFs from iLink" OFF)
 option(LAUNCHER_UDPBD "Support for loading ELFs from UDPBD" OFF)
-option(LAUNCHER_UDPFS "Support for loading ELFs from UDPFS" OFF)
+option(LAUNCHER_UDPFS "Support for loading ELFs from UDPFS" ON)
 option(LAUNCHER_XFROM "Support for loading ELFs from XFROM" ON)
 option(LAUNCHER_GAMES_MENU "Support for the built-in Jogos games menu (scans CD/DVD folders, launches via neutrino.elf)" ON)
+option(LAUNCHER_SMB "Support for listing games on SMB shares in the games menu (launched via OPL)" ON)
 
 # Base sources
 set(EE_SOURCES
@@ -174,6 +175,14 @@ if(LAUNCHER_UDPFS)
     )
 endif()
 
+# SMB game listing support
+if(LAUNCHER_SMB AND LAUNCHER_GAMES_MENU)
+  add_compile_definitions(SMB)
+  set(DEV9 ON)
+  # netman_smap is PS2SDK's netman SMAP driver, not the udpfs one (see below)
+  list(APPEND IRX_FILES netman.irx netman_smap.irx ps2ip-nm.irx ps2ips.irx smbman.irx)
+endif()
+
 # CDROM support
 if(LAUNCHER_CDROM)
   list(APPEND EE_SOURCES src/handler_cdrom.c)
@@ -237,6 +246,11 @@ foreach(irx ${IRX_FILES})
   elseif(irx_name STREQUAL "udpfs_ioman")
     # udpfs_ioman is not a part of PS2SDK
     irx_to_source("${CMAKE_CURRENT_SOURCE_DIR}/iop/udpfs/udpfs/irx/udpfs_ioman.irx" irx_source "udpfs_ioman_irx" "")
+  elseif(irx_name STREQUAL "netman_smap")
+    # PS2SDK's SMAP driver for NETMAN, used by the SMB TCP/IP stack.
+    # Copied under another name, since the generated source is named after the IRX file
+    configure_file("$ENV{PS2SDK}/iop/irx/smap.irx" "${CMAKE_CURRENT_BINARY_DIR}/netman_smap.irx" COPYONLY)
+    irx_to_source("${CMAKE_CURRENT_BINARY_DIR}/netman_smap.irx" irx_source "netman_smap_irx" "")
   elseif(irx_name STREQUAL "mmceman")
     # mmceman is built from submodule
     irx_to_source("${MMCEMAN_IRX}" irx_source "mmceman_irx" "")
@@ -322,6 +336,10 @@ set(LAUNCHER_LINK_LIBS
 )
 if(LAUNCHER_GAMES_MENU)
   list(APPEND LAUNCHER_LINK_LIBS pad)
+endif()
+
+if(LAUNCHER_SMB AND LAUNCHER_GAMES_MENU)
+  list(APPEND LAUNCHER_LINK_LIBS ps2ips)
 endif()
 
 link_newlib_nano(launcher_unc

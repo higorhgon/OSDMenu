@@ -11,7 +11,7 @@ Supported paths are:
 - `mx4sio:` — MX4SIO (supported via BDM)
 - `ilink:` — i.Link mass storage (supported via BDM, disabled in OSDMenu/HOSDMenu)
 - `udpbd:` — UDPBD (supported via BDM, disabled in OSDMenu/HOSDMenu)
-- `udpfs:` — UDPFS (disabled in OSDMenu/HOSDMenu)
+- `udpfs:` — UDPFS
 - `hdd?:` — internal APA-formatted HDD. Both `:pfs:` and `:PATINFO` paths are supported
 - `rom?:` — ROM binaries (`rom1:` and `rom2:` require ADDDRV and ADDROM2 modules in `rom0:`)
 - `xfrom:` — XFROM (PSX)
@@ -40,7 +40,9 @@ The launcher supports the following global arguments:
 
 ### `udpbd` and `udpfs` handlers
 
-Reads PS2 IP address from `mc?:/SYS-CONF/IPCONFIG.DAT`
+Reads PS2 IP address from `mc?:/SYS-CONF/IPCONFIG.DAT`.
+When it doesn't exist, the UDPFS handler uses the static PS2 IP address (`ps2_ip_addr`) from OPL's `mc?:/OPL/conf_network.cfg`
+(or the file used for `games_device_smb`).
 
 ### `cdrom` handler
 
@@ -135,16 +137,43 @@ opl.elf <ISO file name> <title ID> <CD|DVD> mmce <slot>
 OPL looks for the ISO directly in the `CD/` or `DVD/` folder, so games in subfolders, in custom folders or without a
 known title ID fall back to Neutrino. For BDM devices (USB/MX4SIO), OPL uses the first BDM device.
 The `mmce` mode needs a RiptOPL build with MMCE autolaunch support; other OPL builds open their menu instead.
-When launching through OPL, the MMCE card switch is left to OPL, which also handles IGR (including switching the
-MMCE back to the boot card).
+When launching MMCE games through OPL, the MMCE card switch is left to OPL, which also handles IGR (including
+switching the MMCE back to the boot card). OPL's `bdm` and `smb` autolaunch modes don't load the MMCE driver, so the
+launcher switches the card before starting OPL.
 
 **Neutrino v1.8.0 and MMCE**: v1.8.0 takes the MMCE slot from the *last* digit anywhere in the ISO path instead of
 the one before `:`, so ISOs with digits in their name (e.g. `Bloody Roar 3.iso`) hang on a black screen when loaded
 from MMCE. This was fixed upstream after v1.8.0 (commit `cedc060`, "FIX MMCE"). Use the "Latest development build"
 or v1.7.0 instead.
 
-**Current limitations**: no cover art (the OSDSYS custom menu has no per-item icon) and no network storage
-(SMB/FTP/SFTP), which Neutrino doesn't support.
+**Current limitations**: no cover art (the OSDSYS custom menu has no per-item icon).
+
+#### Network games
+Local devices are scanned first, then each network device after its own IOP reset, since UDPFS and SMB drive the
+network adapter with different drivers. Network errors are shown on the scan screen when no games are found.
+
+- **UDPFS** (`games_device_udpfs`): the launcher connects to a UDPFS server with the same drivers Neutrino uses and scans
+  `udpfs:/CD` and `udpfs:/DVD`. Games are launched via Neutrino:
+  ```
+  neutrino.elf -bsd=udpfs -dvd=udpfs:/DVD/game.iso -qb
+  ```
+  The PS2 IP address comes from `IPCONFIG.DAT` or OPL's network settings (see [above](#udpbd-and-udpfs-handlers)).
+  Neutrino loads its in-game network drivers with the IP address from its own `config/bsd-udpfs.toml`
+  (`ip=192.168.1.10` by default), so set the same address there.
+  The server is `pc/udpfs_server.py` from Neutrino, pointed at the folder that holds `CD` and `DVD`:
+  ```
+  python udpfs_server.py -d /path/to/ps2games
+  ```
+- **SMB** (`games_device_smb`): the launcher reads OPL's network settings (`conf_network.cfg`: PS2 IP address or DHCP,
+  `smb_ip`, `smb_port`, `smb_share`, `smb_user`, `smb_pass`) and the ETH prefix (`eth_prefix` from `conf_opl.cfg` in the
+  same folder), logs on to the share with PS2SDK's `smbman` (SMB1, like OPL) and scans `<share>/<prefix>/CD` and `DVD`.
+  NetBIOS server names (`smb_share_use_nbns`) are not supported, `smb_ip` must be set.
+  The settings file is `games_smb_config`, or `conf_network.cfg` next to `games_opl_path`, or `mc?:/OPL/conf_network.cfg`.
+  SMB games can only be launched via OPL (`games_opl_path`, regardless of `games_launcher`), which needs a RiptOPL build
+  with SMB autolaunch support and a title ID for the game:
+  ```
+  opl.elf <ISO file name> <title ID> <CD|DVD> smb
+  ```
 
 #### PS1 games ("PSX >")
 The patcher's "PSX >" entry is passed as item index 9998 (`PSX_MENU_IDX`) and works the same way, with the

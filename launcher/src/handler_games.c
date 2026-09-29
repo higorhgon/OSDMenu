@@ -20,6 +20,10 @@
 #define NEWLIB_PORT_AWARE
 #include <fileXio_rpc.h>
 #include <io_common.h>
+#ifdef SMB
+#include <ps2ips.h>
+#include <ps2smb.h>
+#endif
 
 //
 // Games menu
@@ -84,8 +88,24 @@ static const GamesDeviceEntry gamesDevices[] = {
 #ifdef MMCE
     {Device_MMCE, "mmce%d:", "mmce", 2},
 #endif
+#ifdef UDPFS
+    {Device_UDPFS, "udpfs:", "udpfs", 1},
+#endif
+#ifdef SMB
+    // The mountpoint is smbRoot, which includes OPL's ETH prefix. "smb" games are launched via OPL
+    {Device_SMB, "smb0:", "smb", 1},
+#endif
 };
 #define GAMES_DEVICE_COUNT (sizeof(gamesDevices) / sizeof(gamesDevices[0]))
+
+// Network devices are scanned separately, each after its own IOP reset:
+// UDPFS and SMB use different drivers for the same network adapter
+#define GAMES_NETWORK_DEVICES (Device_UDPFS | Device_SMB)
+
+#ifdef SMB
+#define SMB_MOUNTPOINT "smb0:"
+static char smbRoot[80] = SMB_MOUNTPOINT; // SMB_MOUNTPOINT + OPL's ETH prefix
+#endif
 
 static GameEntry gameList[GAMES_MAX_ENTRIES];
 static int gameCount = 0;
@@ -96,7 +116,8 @@ static int gameListTruncated = 0;
 // serial debug cable
 #define GAMES_MAX_DIAG 8
 typedef struct {
-  char mountpoint[16];
+  char mountpoint[80];
+  const char *error; // why a network device couldn't be scanned
   int available; // mountpoint responded to the initial probe
   int cdOpened;   // fileXioDopen() on the CD folder succeeded
   int cdEntries;  // total directory entries seen (files + folders)
@@ -388,25 +409,175 @@ static int scanEmberFolder(const char *mountpoint, int *emberFound, int *entries
   return 1;
 }
 
+#ifdef SMB
+static DeviceType storageDevice(char *path);
+
+// Reads config (conf_network.cfg), trying both slots for "mc?:" and "mmce?:" paths
+static int tryOPLNetConfig(const char *config) {
+  char path[GAMES_REL_PATH_LEN];
+  snprintf(path, sizeof(path), "%s", config);
+  char *colon = strchr(path, ':');
+  if (!colon || (colon == path) || (colon[-1] != '?'))
+    return readOPLNetConfig(path);
+
+  for (char slot = '0'; slot < '2'; slot++) {
+    colon[-1] = slot;
+    if (!readOPLNetConfig(path))
+      return 0;
+  }
+  return -ENOENT;
+}
+
+// Returns the path of conf_network.cfg next to games_opl_path in path
+static int oplNetConfigNextToOPL(GamesConfig *cfg, char *path, size_t pathSize) {
+  if (!cfg->oplPath)
+    return 0;
+  const char *slash = strrchr(cfg->oplPath, '/');
+  if (!slash)
+    slash = strchr(cfg->oplPath, ':');
+  if (!slash)
+    return 0;
+  snprintf(path, pathSize, "%.*sconf_network.cfg", (int)(slash - cfg->oplPath + 1), cfg->oplPath);
+  return 1;
+}
+
+// Returns the storage driver needed to read OPL's network settings
+static DeviceType smbConfigDevice(GamesConfig *cfg) {
+  if (cfg->smbConfigPath)
+    return storageDevice(cfg->smbConfigPath);
+  return cfg->oplPath ? storageDevice(cfg->oplPath) : Device_None;
+}
+
+// Reads OPL's network settings from games_smb_config, from the OPL folder
+// (games_opl_path) or from mc?:/OPL/, and sets smbRoot to the games folder
+static int loadSMBConfig(GamesConfig *cfg) {
+  char path[GAMES_REL_PATH_LEN];
+  int res = -ENOENT;
+  if (cfg->smbConfigPath)
+    res = tryOPLNetConfig(cfg->smbConfigPath);
+  else {
+    if (oplNetConfigNextToOPL(cfg, path, sizeof(path)))
+      res = tryOPLNetConfig(path);
+    if (res)
+      res = tryOPLNetConfig("mc?:/OPL/conf_network.cfg");
+  }
+  if (res)
+    return res;
+
+  // smbman accepts both separators
+  const char *prefix = oplNetConfig.ethPrefix;
+  while ((*prefix == '/') || (*prefix == '\\'))
+    prefix++;
+  if (*prefix)
+    snprintf(smbRoot, sizeof(smbRoot), SMB_MOUNTPOINT "/%s", prefix);
+  else
+    strcpy(smbRoot, SMB_MOUNTPOINT);
+  int len = strlen(smbRoot);
+  while ((len > 0) && ((smbRoot[len - 1] == '/') || (smbRoot[len - 1] == '\\')))
+    smbRoot[--len] = '\0';
+  return 0;
+}
+
+// Enables DHCP on the ps2ip-nm interface and waits for an address
+static int smbWaitDHCP(void) {
+  t_ip_info info;
+  ps2ip_init();
+  if (ps2ip_getconfig("sm0", &info) < 0)
+    return -EIO;
+
+  memset(&info.ipaddr, 0, sizeof(info.ipaddr));
+  memset(&info.netmask, 0, sizeof(info.netmask));
+  memset(&info.gw, 0, sizeof(info.gw));
+  info.dhcp_enabled = 1;
+  if (ps2ip_setconfig(&info) < 0)
+    return -EIO;
+
+  for (int i = 0; i < 20; i++) {
+    sleep(1);
+    if ((ps2ip_getconfig("sm0", &info) >= 0) && info.ipaddr.s_addr)
+      return 0;
+  }
+  return -ETIMEDOUT;
+}
+
+// Logs on to the SMB server and opens the share from OPL's network settings,
+// the same way OPL does. Returns NULL on success or an error description.
+// Needs initModules(Device_SMB) to be called first.
+static const char *smbConnect(void) {
+  OPLNetConfig *c = &oplNetConfig;
+  if (c->useNBNS || !c->smbIP[0])
+    return "smb_ip nao definido (nomes NetBIOS nao suportados)";
+  if (!c->smbShare[0])
+    return "smb_share nao definido";
+  if (c->dhcp && smbWaitDHCP())
+    return "DHCP falhou";
+
+  static smbLogOn_in_t logon;
+  static smbOpenShare_in_t openShare;
+  memset(&logon, 0, sizeof(logon));
+  memset(&openShare, 0, sizeof(openShare));
+  strncpy(logon.serverIP, c->smbIP, sizeof(logon.serverIP) - 1);
+  logon.serverPort = c->smbPort;
+  strncpy(logon.User, c->smbUser[0] ? c->smbUser : "GUEST", sizeof(logon.User) - 1);
+  logon.PasswordType = openShare.PasswordType = NO_PASSWORD;
+  if (c->smbPass[0]) {
+    static smbGetPasswordHashes_in_t passwd;
+    static smbGetPasswordHashes_out_t hashes;
+    strncpy(passwd.password, c->smbPass, sizeof(passwd.password) - 1);
+    if (fileXioDevctl(SMB_MOUNTPOINT, SMB_DEVCTL_GETPASSWORDHASHES, &passwd, sizeof(passwd), &hashes, sizeof(hashes)) == 0) {
+      memcpy(logon.Password, &hashes, sizeof(hashes));
+      memcpy(openShare.Password, &hashes, sizeof(hashes));
+      logon.PasswordType = openShare.PasswordType = HASHED_PASSWORD;
+    } else {
+      strncpy(logon.Password, c->smbPass, sizeof(logon.Password) - 1);
+      strncpy(openShare.Password, c->smbPass, sizeof(openShare.Password) - 1);
+      logon.PasswordType = openShare.PasswordType = PLAINTEXT_PASSWORD;
+    }
+  }
+
+  // The network link can take a few seconds to come up after loading the drivers
+  int res = -SMB_DEVCTL_LOGON_ERR_CONN;
+  for (int i = 0; (i < 10) && (res == -SMB_DEVCTL_LOGON_ERR_CONN); i++) {
+    if (i)
+      sleep(1);
+    res = fileXioDevctl(SMB_MOUNTPOINT, SMB_DEVCTL_LOGON, &logon, sizeof(logon), NULL, 0);
+  }
+  if (res < 0)
+    return (res == -SMB_DEVCTL_LOGON_ERR_CONN) ? "servidor SMB nao respondeu" : "login SMB falhou";
+
+  strncpy(openShare.ShareName, c->smbShare, sizeof(openShare.ShareName) - 1);
+  if (fileXioDevctl(SMB_MOUNTPOINT, SMB_DEVCTL_OPENSHARE, &openShare, sizeof(openShare), NULL, 0) < 0)
+    return "falha ao abrir smb_share";
+  return NULL;
+}
+#endif
+
 // Returns 1 if the device is enabled for the kind of games being scanned
 static int isDeviceEnabled(GamesConfig *cfg, DeviceType device) {
   if (cfg->kind == GamesKind_PSX)
     return ((device == Device_USB) && cfg->psxUseUSB) || ((device == Device_MX4SIO) && cfg->psxUseMX4SIO) ||
            ((device == Device_MMCE) && cfg->psxUseMMCE);
-  return ((device == Device_USB) && cfg->useUSB) || ((device == Device_MX4SIO) && cfg->useMX4SIO) || ((device == Device_MMCE) && cfg->useMMCE);
+  return ((device == Device_USB) && cfg->useUSB) || ((device == Device_MX4SIO) && cfg->useMX4SIO) || ((device == Device_MMCE) && cfg->useMMCE) ||
+         ((device == Device_UDPFS) && cfg->useUDPFS) || ((device == Device_SMB) && cfg->useSMB);
 }
 
 static int gameEntryCompare(const void *a, const void *b) { return strcasecmp(((const GameEntry *)a)->name, ((const GameEntry *)b)->name); }
 
-// Probes and scans every enabled device/mountpoint combination
-static void scanAllDevices(GamesConfig *cfg) {
-  gameCount = 0;
-  gameListTruncated = 0;
-  scanDiagCount = 0;
+// Adds a diagnostic entry for mountpoint, returns NULL if there's no room left
+static GamesScanDiag *addScanDiag(const char *mountpoint) {
+  if (scanDiagCount >= GAMES_MAX_DIAG)
+    return NULL;
+  GamesScanDiag *diag = &scanDiag[scanDiagCount++];
+  memset(diag, 0, sizeof(*diag));
+  snprintf(diag->mountpoint, sizeof(diag->mountpoint), "%s", mountpoint);
+  return diag;
+}
 
+// Probes and scans every enabled device/mountpoint combination in devices
+static void scanDevices(GamesConfig *cfg, DeviceType devices) {
   for (size_t i = 0; i < GAMES_DEVICE_COUNT; i++) {
     const GamesDeviceEntry *dev = &gamesDevices[i];
-    if (!isDeviceEnabled(cfg, dev->device))
+    if (!(dev->device & devices) || !isDeviceEnabled(cfg, dev->device))
       continue;
 
     for (int idx = 0; idx < dev->mountCount; idx++) {
@@ -415,6 +586,10 @@ static void scanAllDevices(GamesConfig *cfg) {
       GamesScanDiag *diag = &scanDiag[scanDiagCount++];
       memset(diag, 0, sizeof(*diag));
       snprintf(diag->mountpoint, sizeof(diag->mountpoint), dev->mountFmt, idx);
+#ifdef SMB
+      if (dev->device == Device_SMB)
+        snprintf(diag->mountpoint, sizeof(diag->mountpoint), "%s", smbRoot);
+#endif
 
       // MMCE doesn't go through the BDM/FAT layer and enumerates immediately
       // (handler_mc.c:handleMMCE does the same single-shot check when
@@ -444,8 +619,6 @@ static void scanAllDevices(GamesConfig *cfg) {
       diag->dvdOpened = scanFolder(diag->mountpoint, cfg->dvdFolder, GameMedia_DVD, dev->neutrinoDriver, &diag->dvdEntries);
     }
   }
-
-  qsort(gameList, gameCount, sizeof(GameEntry), gameEntryCompare);
 }
 
 // Prints what the scan actually saw, per mountpoint, so a misconfigured
@@ -458,6 +631,10 @@ static void printScanDiagnostics(GamesConfig *cfg) {
   }
   for (int i = 0; i < scanDiagCount; i++) {
     GamesScanDiag *d = &scanDiag[i];
+    if (d->error) {
+      scr_printf(" %s: %s\n", d->mountpoint, d->error);
+      continue;
+    }
     if (!d->available && !d->cdOpened && !d->dvdOpened) {
       scr_printf(" %s nao respondeu (dispositivo ausente/nao pronto)\n", d->mountpoint);
       continue;
@@ -519,6 +696,7 @@ static DeviceType storageDevice(char *path) {
   case Device_USB:
   case Device_MX4SIO:
   case Device_ATA:
+  case Device_UDPFS:
     return type;
   default:
     return Device_None;
@@ -574,12 +752,32 @@ static void mmceSetGameID(const char *elfPath, const char *id) {
 
 // Returns 1 if OPL can autolaunch the game. OPL's argv autolaunch looks for the ISO
 // directly in the CD/ or DVD/ folder, so media is set to "CD" or "DVD" and fileName to
-// the ISO name. mode is "bdm" for USB/MX4SIO, or "mmce" (with slot "0"/"1") for MMCE,
-// which needs a RiptOPL build with MMCE autolaunch support.
+// the ISO name. mode is "bdm" for USB/MX4SIO, "mmce" (with slot "0"/"1") for MMCE or
+// "smb" for SMB, which need a RiptOPL build with MMCE/SMB autolaunch support.
 static int canLaunchWithOPL(char *isoPath, const char *id, const char **media, const char **fileName, const char **mode, char *slot) {
   DeviceType type = guessDeviceType(isoPath);
   if (!id[0])
     return 0;
+#ifdef SMB
+  if (!strncmp(isoPath, "smb", 3)) {
+    // OPL's games folder is <share>/<ETH prefix>/CD|DVD, check the folder the ISO is in
+    *mode = "smb";
+    char *name = strrchr(isoPath, '/');
+    if (!name)
+      return 0;
+    char *folder = name;
+    while ((folder > isoPath) && (folder[-1] != '/') && (folder[-1] != ':'))
+      folder--;
+    if (((name - folder) == 2) && !strncasecmp(folder, "CD", 2))
+      *media = "CD";
+    else if (((name - folder) == 3) && !strncasecmp(folder, "DVD", 3))
+      *media = "DVD";
+    else
+      return 0;
+    *fileName = name + 1;
+    return 1;
+  }
+#endif
   if ((type == Device_USB) || (type == Device_MX4SIO))
     *mode = "bdm";
   else if ((type == Device_MMCE) && (isoPath[4] >= '0') && (isoPath[4] <= '1')) {
@@ -618,7 +816,18 @@ static void launchGame(GamesConfig *cfg, const char *bsd, char *isoPath, const c
   const char *oplMode = NULL;
   char oplSlot[2] = {0};
   int useOPL = 0;
-  if (cfg->useOPL) {
+  if (!strcmp(bsd, "smb")) {
+    // Games on SMB shares can only be launched via OPL
+    if (!cfg->oplPath) {
+      msg("Games: games_opl_path is not set in OSDMENU.CNF\n");
+      return;
+    }
+    if (!canLaunchWithOPL(isoPath, id, &media, &fileName, &oplMode, oplSlot)) {
+      msg("Games: OPL can't launch %s (the ISO must be in CD/DVD with a known title ID)\n", isoPath);
+      return;
+    }
+    useOPL = 1;
+  } else if (cfg->useOPL) {
     if (cfg->oplPath && canLaunchWithOPL(isoPath, id, &media, &fileName, &oplMode, oplSlot))
       useOPL = 1;
     else if (cfg->neutrinoPath)
@@ -632,22 +841,25 @@ static void launchGame(GamesConfig *cfg, const char *bsd, char *isoPath, const c
   }
 
   DeviceType mask = storageDevice(isoPath) | storageDevice(elfPath);
-  // OPL switches the MMCE card itself, taking its per-game VMC settings into account
+  // OPL's MMCE mode switches the card itself, taking its per-game VMC settings into account.
+  // Its bdm/smb autolaunch modes don't load the MMCE driver, so the card is switched here
 #ifdef MMCE
-  if (cfg->mmceGameID && id[0] && !useOPL)
+  int setGameID = cfg->mmceGameID && id[0] && !(useOPL && !strcmp(oplMode, "mmce"));
+  if (setGameID)
     mask |= Device_MMCE;
 #endif
   if (mask && initModules(mask))
     return;
 
 #ifdef MMCE
-  if (cfg->mmceGameID && id[0] && !useOPL)
+  if (setGameID)
     mmceSetGameID(elfPath, id);
 #endif
 
   if (useOPL) {
     // opl.elf <ISO name> <title ID> <CD/DVD> bdm
     // opl.elf <ISO name> <title ID> <CD/DVD> mmce <slot>
+    // opl.elf <ISO name> <title ID> <CD/DVD> smb
     char *argv[] = {elfPath, (char *)fileName, (char *)id, (char *)media, (char *)oplMode, oplSlot};
     launchGamesELF(oplSlot[0] ? 6 : 5, argv);
     return;
@@ -1060,6 +1272,8 @@ static void freeGamesConfig(GamesConfig *cfg) {
     free(cfg->returnPath);
   if (cfg->oplPath)
     free(cfg->oplPath);
+  if (cfg->smbConfigPath)
+    free(cfg->smbConfigPath);
 }
 
 // Frees cfg and returns to OSDMenu, reopening the games submenu. ExecOSD() alone would boot the ROM OSDSYS,
@@ -1118,7 +1332,7 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
       sortRecent = 0;
   }
 
-  if ((cfg->kind == GamesKind_PS2) && (modeType != 's') && !cfg->neutrinoPath && !(cfg->useOPL && cfg->oplPath)) {
+  if ((cfg->kind == GamesKind_PS2) && (modeType != 's') && !cfg->neutrinoPath && !(cfg->oplPath && (cfg->useOPL || cfg->useSMB))) {
     msg("Games: games_neutrino_path is not set in OSDMENU.CNF\n");
     sleep(3);
     if (modeType)
@@ -1138,20 +1352,36 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
     return res;
   }
 
-  // Device_Basic must not be in this mask: handleOSDM() has already loaded
+  // Local devices are scanned first, then each network device after its own IOP reset,
+  // since UDPFS and SMB drive the network adapter with different drivers.
+  // Device_Basic must not be in these masks: handleOSDM() has already loaded
   // Device_Basic | Device_CDROM, and initModules() returns early if *any* bit
   // of the requested mask is already loaded, which would skip loading the
   // storage drivers and padman entirely. Basic modules are always reloaded
-  // on every IOP reset anyway. padman is only needed for the full-screen list.
-  DeviceType scanMask = (modeType == 's') ? Device_None : Device_Games;
+  // on every IOP reset anyway. padman is only needed for the full-screen list,
+  // so it's loaded with the last group of drivers.
+  DeviceType localMask = Device_None;
+  DeviceType networkMask = Device_None;
   for (size_t i = 0; i < GAMES_DEVICE_COUNT; i++)
-    if (isDeviceEnabled(cfg, gamesDevices[i].device))
-      scanMask |= gamesDevices[i].device;
+    if (isDeviceEnabled(cfg, gamesDevices[i].device)) {
+      if (gamesDevices[i].device & GAMES_NETWORK_DEVICES)
+        networkMask |= gamesDevices[i].device;
+      else
+        localMask |= gamesDevices[i].device;
+    }
+#ifdef SMB
+  // The SMB settings are read from OPL's folder while the local drivers are loaded
+  if (networkMask & Device_SMB)
+    localMask |= smbConfigDevice(cfg);
+#endif
+  DeviceType uiMask = (modeType == 's') ? Device_None : Device_Games;
 
   if (modeType == 's')
     msg((cfg->kind == GamesKind_PSX) ? "Scanning for PS1 games...\n" : "Scanning for games...\n");
 
-  int res = initModules(scanMask);
+  int res = 0;
+  if (localMask || !networkMask)
+    res = initModules(localMask | (networkMask ? Device_None : uiMask));
   if (res) {
     msg("Games: Failed to initialize devices: %d\n", res);
     sleep(3);
@@ -1164,7 +1394,45 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
     return res;
   }
 
-  scanAllDevices(cfg);
+  gameCount = 0;
+  gameListTruncated = 0;
+  scanDiagCount = 0;
+  scanDevices(cfg, localMask);
+
+#ifdef SMB
+  const char *smbError = NULL;
+  if ((networkMask & Device_SMB) && loadSMBConfig(cfg))
+    smbError = "conf_network.cfg do OPL nao encontrado (games_smb_config)";
+#endif
+#ifdef UDPFS
+  if (networkMask & Device_UDPFS) {
+    msg("Connecting to the UDPFS server...\n");
+    // padman is loaded with the SMB drivers when both are enabled
+    if (initModules(Device_UDPFS | ((networkMask & Device_SMB) ? Device_None : uiMask))) {
+      GamesScanDiag *diag = addScanDiag("udpfs:");
+      if (diag)
+        diag->error = "falha ao iniciar a rede (IPCONFIG.DAT ou OPL/conf_network.cfg)";
+    } else
+      scanDevices(cfg, Device_UDPFS);
+  }
+#endif
+#ifdef SMB
+  if (networkMask & Device_SMB) {
+    msg("Connecting to the SMB share...\n");
+    if (!smbError && initModules(Device_SMB | uiMask))
+      smbError = "falha ao iniciar a rede";
+    if (!smbError)
+      smbError = smbConnect();
+    if (smbError) {
+      GamesScanDiag *diag = addScanDiag(smbRoot);
+      if (diag)
+        diag->error = smbError;
+    } else
+      scanDevices(cfg, Device_SMB);
+  }
+#endif
+
+  qsort(gameList, gameCount, sizeof(GameEntry), gameEntryCompare);
 
   if (modeType == 's') {
     // Write the cache even when empty, so the submenu opens with just

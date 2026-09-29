@@ -103,7 +103,7 @@ See the launcher [README](launcher/README.md) for more details.
   - PS2LOGO is patched to always use the disc region
   - OSDSYS disc key check is patched out to fix DVD master discs being detected as "invalid"
 - Integrated Neutrino GSM for disc games and applications
-- Built-in "Games >" OSDSYS submenu listing PS2 games from `CD`/`DVD` folders on USB/MX4SIO/MMCE devices, launched directly via a user-installed standalone Neutrino or OPL
+- Built-in "Games >" OSDSYS submenu listing PS2 games from `CD`/`DVD` folders on USB/MX4SIO/MMCE devices, a UDPFS server or an SMB share, launched directly via a user-installed standalone Neutrino or OPL
 - Built-in "PSX >" OSDSYS submenu listing PS1 games from `EMBER/games` on USB/MX4SIO/MMCE devices, launched directly via a user-installed Ember
 - "Unlimited" number of paths for each entry
 - Support for 1080i and 480p (as line-doubled 240p) video modes
