@@ -126,9 +126,13 @@ With `games_launcher = opl`, `games_opl_path` (e.g. [RiptOPL](https://github.com
 launched instead using OPL's argv autolaunch:
 ```
 opl.elf <ISO file name> <title ID> <CD|DVD> bdm
+opl.elf <ISO file name> <title ID> <CD|DVD> mmce <slot>
 ```
-OPL only supports this for BDM devices (USB/MX4SIO) and looks for the ISO directly in the `CD/` or `DVD/` folder of the
-first BDM device, so games on MMCE, in subfolders, in custom folders or without a known title ID fall back to Neutrino.
+OPL looks for the ISO directly in the `CD/` or `DVD/` folder, so games in subfolders, in custom folders or without a
+known title ID fall back to Neutrino. For BDM devices (USB/MX4SIO), OPL uses the first BDM device.
+The `mmce` mode needs a RiptOPL build with MMCE autolaunch support; other OPL builds open their menu instead.
+When launching through OPL, the MMCE card switch is left to OPL, which also handles IGR (including switching the
+MMCE back to the boot card).
 
 **Neutrino v1.8.0 and MMCE**: v1.8.0 takes the MMCE slot from the *last* digit anywhere in the ISO path instead of
 the one before `:`, so ISOs with digits in their name (e.g. `Bloody Roar 3.iso`) hang on a black screen when loaded

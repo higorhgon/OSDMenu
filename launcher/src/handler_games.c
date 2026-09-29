@@ -499,12 +499,21 @@ static void mmceSetGameID(const char *elfPath, const char *id) {
 }
 #endif
 
-// Returns 1 if OPL can autolaunch the game. OPL's argv autolaunch only
-// supports BDM devices and looks for the ISO directly in the CD/ or DVD/
-// folder, so media must be set to "CD" or "DVD" and fileName to the ISO name.
-static int canLaunchWithOPL(char *isoPath, const char *id, const char **media, const char **fileName) {
+// Returns 1 if OPL can autolaunch the game. OPL's argv autolaunch looks for the ISO
+// directly in the CD/ or DVD/ folder, so media is set to "CD" or "DVD" and fileName to
+// the ISO name. mode is "bdm" for USB/MX4SIO, or "mmce" (with slot "0"/"1") for MMCE,
+// which needs a RiptOPL build with MMCE autolaunch support.
+static int canLaunchWithOPL(char *isoPath, const char *id, const char **media, const char **fileName, const char **mode, char *slot) {
   DeviceType type = guessDeviceType(isoPath);
-  if (((type != Device_USB) && (type != Device_MX4SIO)) || !id[0])
+  if (!id[0])
+    return 0;
+  if ((type == Device_USB) || (type == Device_MX4SIO))
+    *mode = "bdm";
+  else if ((type == Device_MMCE) && (isoPath[4] >= '0') && (isoPath[4] <= '1')) {
+    *mode = "mmce";
+    slot[0] = isoPath[4];
+    slot[1] = '\0';
+  } else
     return 0;
 
   const char *rel = strchr(isoPath, ':');
@@ -533,9 +542,11 @@ static int canLaunchWithOPL(char *isoPath, const char *id, const char **media, c
 static void launchGame(GamesConfig *cfg, const char *bsd, char *isoPath, const char *id) {
   const char *media = NULL;
   const char *fileName = NULL;
+  const char *oplMode = NULL;
+  char oplSlot[2] = {0};
   int useOPL = 0;
   if (cfg->useOPL) {
-    if (cfg->oplPath && canLaunchWithOPL(isoPath, id, &media, &fileName))
+    if (cfg->oplPath && canLaunchWithOPL(isoPath, id, &media, &fileName, &oplMode, oplSlot))
       useOPL = 1;
     else if (cfg->neutrinoPath)
       msg("Games: OPL can't launch this game, using Neutrino\n");
@@ -548,22 +559,24 @@ static void launchGame(GamesConfig *cfg, const char *bsd, char *isoPath, const c
   }
 
   DeviceType mask = storageDevice(isoPath) | storageDevice(elfPath);
+  // OPL switches the MMCE card itself, taking its per-game VMC settings into account
 #ifdef MMCE
-  if (cfg->mmceGameID && id[0])
+  if (cfg->mmceGameID && id[0] && !useOPL)
     mask |= Device_MMCE;
 #endif
   if (mask && initModules(mask))
     return;
 
 #ifdef MMCE
-  if (cfg->mmceGameID && id[0])
+  if (cfg->mmceGameID && id[0] && !useOPL)
     mmceSetGameID(elfPath, id);
 #endif
 
   if (useOPL) {
     // opl.elf <ISO name> <title ID> <CD/DVD> bdm
-    char *argv[] = {elfPath, (char *)fileName, (char *)id, (char *)media, "bdm"};
-    launchGamesELF(5, argv);
+    // opl.elf <ISO name> <title ID> <CD/DVD> mmce <slot>
+    char *argv[] = {elfPath, (char *)fileName, (char *)id, (char *)media, (char *)oplMode, oplSlot};
+    launchGamesELF(oplSlot[0] ? 6 : 5, argv);
     return;
   }
 
