@@ -64,6 +64,7 @@ typedef struct {
   const char *neutrinoDriver;       // Neutrino -bsd= driver ("usb"/"mx4sio"/"mmce"), static lifetime
   GameMediaType media;
   char id[GAMES_ID_LEN];            // Title ID (e.g. "SLUS_202.12"), empty if unknown
+  uint32_t played;                  // "played" counter carried over from the previous cache
 } GameEntry;
 
 typedef struct {
@@ -718,22 +719,123 @@ static void getGamesCachePath(GamesConfig *cfg, char *path) {
   path[2] = (settings.mcHint == 1) ? '1' : '0';
 }
 
+// A "key = value" line of a cache file
+typedef struct {
+  char *key;
+  char *value;
+} CacheLine;
+
+// Reads the cache file and splits it into lines. The keys and values point into the returned buffer.
+// Returns NULL if the file can't be read; *lines must be freed along with the buffer
+static char *readGamesCache(const char *path, CacheLine **lines, int *lineCount) {
+  *lines = NULL;
+  *lineCount = 0;
+
+  int fd = open(path, O_RDONLY);
+  if (fd < 0)
+    return NULL;
+  int size = lseek(fd, 0, SEEK_END);
+  lseek(fd, 0, SEEK_SET);
+  char *buf = (size > 0) ? malloc(size + 1) : NULL;
+  if (!buf || (read(fd, buf, size) != size)) {
+    close(fd);
+    free(buf);
+    return NULL;
+  }
+  close(fd);
+  buf[size] = '\0';
+
+  int maxLines = 1;
+  for (int i = 0; i < size; i++)
+    if (buf[i] == '\n')
+      maxLines++;
+  *lines = malloc(maxLines * sizeof(CacheLine));
+  if (!*lines) {
+    free(buf);
+    return NULL;
+  }
+
+  char *line = buf;
+  while (line && *line && (*lineCount < maxLines)) {
+    char *next = strchr(line, '\n');
+    if (next)
+      *next++ = '\0';
+
+    char *value = strchr(line, '=');
+    if (value) {
+      // Trim "key = value\r"
+      char *keyEnd = value;
+      while ((keyEnd > line) && isspace((int)keyEnd[-1]))
+        keyEnd--;
+      *keyEnd = '\0';
+      value++;
+      while (isspace((int)*value))
+        value++;
+      value[strcspn(value, "\r\n")] = '\0';
+      (*lines)[*lineCount].key = line;
+      (*lines)[*lineCount].value = value;
+      (*lineCount)++;
+    }
+    line = next;
+  }
+  return buf;
+}
+
+// Returns the path key of a game ("dvd" for PS2 games, "psx" for PS1 games)
+static const char *cachePathKey(GamesConfig *cfg) { return (cfg->kind == GamesKind_PSX) ? "psx" : "dvd"; }
+
 // Writes the scan result to GAMES_CACHE_PATH or PSX_CACHE_PATH, which the patcher reads on boot
-// to show the games as an OSDSYS submenu. Each game is a "game" (display name) line followed by
-// its Neutrino "bsd" driver, "dvd" ISO path and optional "id" (title ID) lines for PS2 games,
-// or by its "psx" game folder line for PS1 games.
-static int writeGamesCache(GamesConfig *cfg) {
+// to show the games as an OSDSYS submenu. The file starts with the "sort" order ("name" or "recent")
+// chosen in the submenu. Each game is a "game" (display name) line followed by its Neutrino "bsd"
+// driver, "dvd" ISO path and optional "id" (title ID) lines for PS2 games, or by its "psx" game folder
+// line for PS1 games, and by an optional "played" counter, higher for the most recently played games.
+// sortRecent is 1 or 0 to set the sort order, -1 to keep the one from the previous cache, and the
+// "played" counters are carried over from the previous cache for the games that are still there.
+static int writeGamesCache(GamesConfig *cfg, int sortRecent) {
   char path[32];
   getGamesCachePath(cfg, path);
+
+  // Carry over the sort order and the "played" counters
+  CacheLine *lines;
+  int lineCount;
+  char *oldCache = readGamesCache(path, &lines, &lineCount);
+  for (int i = 0; i < gameCount; i++)
+    gameList[i].played = 0;
+  if (oldCache) {
+    const char *pathKey = cachePathKey(cfg);
+    const char *gamePath = NULL;
+    for (int i = 0; i < lineCount; i++) {
+      if (!strcmp(lines[i].key, "sort")) {
+        if (sortRecent < 0)
+          sortRecent = !strcmp(lines[i].value, "recent");
+      } else if (!strcmp(lines[i].key, "game"))
+        gamePath = NULL;
+      else if (!strcmp(lines[i].key, pathKey))
+        gamePath = lines[i].value;
+      else if (!strcmp(lines[i].key, "played") && gamePath) {
+        for (int j = 0; j < gameCount; j++) {
+          if (!strcmp(gameList[j].path, gamePath)) {
+            gameList[j].played = strtoul(lines[i].value, NULL, 10);
+            break;
+          }
+        }
+      }
+    }
+    free(lines);
+    free(oldCache);
+  }
 
   int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC);
   if (fd < 0)
     return fd;
 
-  char line[GAMES_NAME_LEN + GAMES_REL_PATH_LEN + 32];
+  char line[GAMES_NAME_LEN + GAMES_REL_PATH_LEN + 64];
   int res = 0;
+  int len = snprintf(line, sizeof(line), "sort = %s\n", (sortRecent > 0) ? "recent" : "name");
+  if (write(fd, line, len) != len)
+    res = -EIO;
+
   for (int i = 0; (i < gameCount) && !res; i++) {
-    int len;
     if (cfg->kind == GamesKind_PSX)
       len = snprintf(line, sizeof(line), "game = %s\npsx = %s\n", gameList[i].name, gameList[i].path);
     else
@@ -741,11 +843,68 @@ static int writeGamesCache(GamesConfig *cfg) {
                      gameList[i].id[0] ? "id = " : "", gameList[i].id, gameList[i].id[0] ? "\n" : "");
     if (len >= (int)sizeof(line))
       len = sizeof(line) - 1;
+    if (gameList[i].played && (len < (int)sizeof(line) - 24))
+      len += snprintf(&line[len], sizeof(line) - len, "played = %u\n", (unsigned int)gameList[i].played);
     if (write(fd, line, len) != len)
       res = -EIO;
   }
   close(fd);
   return res;
+}
+
+// Marks game idx as the most recently played one and saves the sort order in the cache.
+// A failure only loses the "played" order, so it's not reported
+static void markGamePlayed(GamesConfig *cfg, int idx, int sortRecent) {
+  char path[32];
+  getGamesCachePath(cfg, path);
+
+  CacheLine *lines;
+  int lineCount;
+  char *cache = readGamesCache(path, &lines, &lineCount);
+  if (!cache)
+    return;
+
+  uint32_t maxPlayed = 0;
+  int outSize = 32;
+  for (int i = 0; i < lineCount; i++) {
+    if ((sortRecent < 0) && !strcmp(lines[i].key, "sort"))
+      sortRecent = !strcmp(lines[i].value, "recent");
+    if (!strcmp(lines[i].key, "played")) {
+      uint32_t played = strtoul(lines[i].value, NULL, 10);
+      if (played > maxPlayed)
+        maxPlayed = played;
+    }
+    outSize += strlen(lines[i].key) + strlen(lines[i].value) + 4;
+  }
+
+  char *out = malloc(outSize + 32);
+  if (out) {
+    int len = sprintf(out, "sort = %s\n", (sortRecent > 0) ? "recent" : "name");
+    int current = -1;
+    for (int i = 0; i < lineCount; i++) {
+      if (!strcmp(lines[i].key, "sort"))
+        continue;
+      if ((current == idx) && !strcmp(lines[i].key, "played"))
+        continue; // Replaced below
+      if (!strcmp(lines[i].key, "game")) {
+        if (current == idx) // The game's lines ended
+          len += sprintf(&out[len], "played = %u\n", (unsigned int)(maxPlayed + 1));
+        current++;
+      }
+      len += sprintf(&out[len], "%s = %s\n", lines[i].key, lines[i].value);
+    }
+    if (current == idx) // Last game
+      len += sprintf(&out[len], "played = %u\n", (unsigned int)(maxPlayed + 1));
+
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd >= 0) {
+      write(fd, out, len);
+      close(fd);
+    }
+    free(out);
+  }
+  free(lines);
+  free(cache);
 }
 
 // Launches game idx from the cache without scanning. Only returns on failure.
@@ -947,6 +1106,18 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
   const char *mode = strrchr(arg, ':');
   char modeType = (mode && ((mode[1] == 'g') || (mode[1] == 's'))) ? mode[1] : '\0';
 
+  // The mode ends with the submenu's sort order: 'r' (recently played) or 'n' (name)
+  int sortRecent = -1;
+  if (modeType) {
+    const char *sort = mode + 2;
+    while (isdigit((int)*sort))
+      sort++;
+    if (*sort == 'r')
+      sortRecent = 1;
+    else if (*sort == 'n')
+      sortRecent = 0;
+  }
+
   if ((cfg->kind == GamesKind_PS2) && (modeType != 's') && !cfg->neutrinoPath && !(cfg->useOPL && cfg->oplPath)) {
     msg("Games: games_neutrino_path is not set in OSDMENU.CNF\n");
     sleep(3);
@@ -960,6 +1131,7 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
   }
 
   if (modeType == 'g') {
+    markGamePlayed(cfg, atoi(mode + 2), sortRecent);
     int res = launchCachedGame(cfg, atoi(mode + 2));
     sleep(5);
     returnToMenu(cfg, patcherPath);
@@ -997,7 +1169,7 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
   if (modeType == 's') {
     // Write the cache even when empty, so the submenu opens with just
     // "< Back"/"Refresh list" instead of rescanning on every open
-    res = writeGamesCache(cfg);
+    res = writeGamesCache(cfg, sortRecent);
     if (res < 0)
       msg("Games: failed to write the games list: %d\n", res);
     else

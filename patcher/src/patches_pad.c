@@ -10,17 +10,12 @@
 
 #define PAD_STATE_STABLE 6
 
-// Button bits in the second button byte (active low)
-#define PAD_TRIANGLE 0x10
-#define PAD_CIRCLE 0x20
-#define PAD_CROSS 0x40
-
 static int (*scePadPortOpen)(int port, int slot, void *addr) = NULL;
 static volatile uint8_t *padBuf = NULL;
 static int posState = 0;
-static int posButtons = 0; // Second button byte
-static uint8_t backMask = 0;
-static uint8_t prevButtons = 0xff;
+static int posButtons = 0; // First of the two button bytes
+static uint16_t backMask = 0;
+static uint16_t prevButtons = 0;
 
 static int hookPadPortOpen(int port, int slot, void *addr) {
   if ((port == 0) && (slot == 0))
@@ -53,10 +48,10 @@ void patchPadPortOpen(uint8_t *osd) {
 
   if (patterns[i].newLayout) {
     posState = 112;
-    posButtons = 3;
+    posButtons = 2;
   } else {
     posState = 4;
-    posButtons = 11;
+    posButtons = 10;
   }
   scePadPortOpen = (void *)func;
 
@@ -72,16 +67,18 @@ void patchPadPortOpen(uint8_t *osd) {
 
   // Circle confirms on Japanese consoles, so Cross goes back there
   int japanese = (settings.region == OSD_REGION_JAP) || ((settings.region == OSD_REGION_DEFAULT) && (settings.romver[4] == 'J'));
-  backMask = PAD_TRIANGLE | (japanese ? PAD_CROSS : PAD_CIRCLE);
+  backMask = PADB_TRIANGLE | (japanese ? PADB_CROSS : PADB_CIRCLE);
 }
 
-int padBackPressed(void) {
+uint16_t padNewPresses(void) {
   if (!padBuf || (padBuf[posState] != PAD_STATE_STABLE))
     return 0;
 
-  uint8_t buttons = padBuf[posButtons];
-  // Buttons are active low: a bit going from 1 to 0 is a new press
-  int pressed = (prevButtons & ~buttons) & backMask;
+  // Buttons are active low in the buffer
+  uint16_t buttons = ~(padBuf[posButtons] | (padBuf[posButtons + 1] << 8));
+  uint16_t pressed = buttons & ~prevButtons;
   prevButtons = buttons;
-  return pressed != 0;
+  return pressed;
 }
+
+uint16_t padBackButtons(void) { return backMask; }

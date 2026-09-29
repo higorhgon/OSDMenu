@@ -5,12 +5,12 @@
 #include "launcher.h"
 #include "patches_common.h"
 #include "patches_osdmenu.h"
+#include "patches_pad.h"
 #include "patterns_fmcb.h"
 #include "settings.h"
 #ifdef GAMES_MENU
 #include "defaults.h"
 #include "livescan.h"
-#include "patches_pad.h"
 #include <stddef.h>
 #endif
 #include <kernel.h>
@@ -77,7 +77,8 @@ static void launchMenuItem(int idx, const char *suffix) {
 // The patcher path is appended after '|' so the launcher can return to OSDMenu afterwards
 static void launchGamesMode(GamesSubmenu *menu, const char *mode) {
   char suffix[16 + sizeof(settings.bootPath)];
-  snprintf(suffix, sizeof(suffix), "%s%s%s", mode, settings.bootPath[0] ? "|" : "", settings.bootPath);
+  // The sort order ('r'ecent or 'n'ame) follows the mode so the launcher saves it in the cache
+  snprintf(suffix, sizeof(suffix), "%s%c%s%s", mode, menu->sortRecent ? 'r' : 'n', settings.bootPath[0] ? "|" : "", settings.bootPath);
   launchMenuItem(menu->itemIdx, suffix);
 }
 
@@ -95,14 +96,37 @@ static void setMenuEntry(int pos, int slot) {
   }
 }
 
+static void closeGamesMenu(void);
+
+// Fills menu->order: games in cache order (by name), or most recently played first,
+// followed by the games that were never played in name order
+static void sortGames(GamesSubmenu *menu) {
+  for (int i = 0; i < menu->count; i++)
+    menu->order[i] = i;
+  if (!menu->sortRecent)
+    return;
+
+  // Stable insertion sort by the "played" counter, highest first
+  for (int i = 1; i < menu->count; i++) {
+    uint8_t idx = menu->order[i];
+    int j = i;
+    while ((j > 0) && (menu->played[menu->order[j - 1]] < menu->played[idx])) {
+      menu->order[j] = menu->order[j - 1];
+      j--;
+    }
+    menu->order[j] = idx;
+  }
+}
+
 // Shows "< Back", the games and "Refresh list" of the submenu as the custom entries.
 // OSDSYS reads the entry table and cursor from menuInfo every frame, so this takes
-// effect immediately without leaving the OSD
+// effect immediately without leaving the OSD. The "< Back" label shows the sort order
 static void showGamesEntries(GamesSubmenu *menu) {
   int pos = 0;
+  strcpy(settings.menuItemName[menu->base + menu->count], menu->sortRecent ? "< Back  [Recent]" : "< Back  [A-Z]");
   setMenuEntry(pos++, menu->base + menu->count); // "< Back"
   for (int i = 0; i < menu->count; i++)
-    setMenuEntry(pos++, menu->base + i);
+    setMenuEntry(pos++, menu->base + menu->order[i]);
   setMenuEntry(pos++, menu->base + menu->count + 1); // "Refresh list"
 
   menuInfo->entryCount = 2 + pos;
@@ -112,8 +136,60 @@ static void showGamesEntries(GamesSubmenu *menu) {
 // Replaces the custom entries with the submenu
 static void openGamesMenu(GamesSubmenu *menu) {
   gamesMenuReturnEntry = menuInfo->currentEntry;
+  sortGames(menu);
   showGamesEntries(menu);
   activeMenu = menu;
+}
+
+// Switches the active submenu between sorting by name and by most recently played,
+// keeping the cursor on the same game
+static void toggleGamesSort(void) {
+  GamesSubmenu *menu = activeMenu;
+  int pos = (int)menuInfo->currentEntry - 3;
+  int selected = ((pos >= 0) && (pos < menu->count)) ? menu->order[pos] : -1;
+
+  menu->sortRecent = !menu->sortRecent;
+  sortGames(menu);
+  uint32_t cursor = menuInfo->currentEntry;
+  showGamesEntries(menu);
+  menuInfo->currentEntry = cursor;
+
+  for (int i = 0; (selected >= 0) && (i < menu->count); i++) {
+    if (menu->order[i] == selected) {
+      menuInfo->currentEntry = 3 + i;
+      break;
+    }
+  }
+}
+
+// Moves the cursor a page (OSDSYS_num_displayed_items) up or down within the submenu
+static void pageGamesMenu(int direction) {
+  int page = (settings.displayedItems > 1) ? settings.displayedItems : 1;
+  int entry = (int)menuInfo->currentEntry + direction * page;
+  int first = 2;                                // "< Back"
+  int last = (int)menuInfo->entryCount - 1;     // "Refresh list"
+  if (entry < first)
+    entry = first;
+  if (entry > last)
+    entry = last;
+  menuInfo->currentEntry = entry;
+}
+
+// Handles the submenu buttons OSDSYS doesn't: Circle/Triangle to go back,
+// Square to change the sort order, Left/Right to move a page
+static void handleGamesMenuButtons(void) {
+  uint16_t pressed = padNewPresses();
+  if (!pressed)
+    return;
+
+  if (pressed & padBackButtons())
+    closeGamesMenu();
+  else if (pressed & PADB_SQUARE)
+    toggleGamesSort();
+  else if (pressed & PADB_RIGHT)
+    pageGamesMenu(1);
+  else if (pressed & PADB_LEFT)
+    pageGamesMenu(-1);
 }
 
 // Writes the "< Back" and "Refresh list" labels after the games
@@ -213,6 +289,7 @@ static void failLiveScan(const char *label) {
   liveScanActive = 0;
   liveScanDisabled = 1;
   setGamesLabels(liveScanMenu, label);
+  sortGames(liveScanMenu);
   showGamesEntries(liveScanMenu);
   menuInfo->currentEntry = 2 + liveScanMenu->count + 1; // Keep the cursor on "Refresh list"
 }
@@ -301,13 +378,17 @@ static void pollLiveScan(void) {
     return;
   }
 
-  for (int i = 0; i < count; i++)
+  // gamescan.irx doesn't keep the "played" counters, so the list is shown by name
+  for (int i = 0; i < count; i++) {
     iopReadString(LIVESCAN_FIELD(names) + i * LIVESCAN_NAME_LEN, settings.menuItemName[menu->base + i], LIVESCAN_NAME_LEN);
+    menu->played[i] = 0;
+  }
   menu->count = count;
   menu->cacheLoaded = 1;
 
   liveScanActive = 0;
   setGamesLabels(menu, "Refresh list");
+  sortGames(menu);
   showGamesEntries(menu);
 }
 #endif
@@ -364,8 +445,9 @@ static void handleGamesMenuEntry(int pos) {
     return;
   }
 
+  // The launcher takes the game's index in the cache
   char mode[16];
-  sprintf(mode, ":g%d", pos - 1);
+  sprintf(mode, ":g%d", menu->order[pos - 1]);
   launchGamesMode(menu, mode);
 }
 #endif
@@ -529,8 +611,8 @@ void drawMenuItemSelected(int X, int Y, uint32_t *color, int alpha, const char *
 #if !defined(HOSD) && defined(GAMES_MENU)
   if (liveScanActive && (num == 0))
     pollLiveScan();
-  else if (activeMenu && (num == 0) && padBackPressed())
-    closeGamesMenu();
+  else if (activeMenu && (num == 0))
+    handleGamesMenuButtons();
 #endif
 #ifdef HOSD
   asm volatile("move %0, $s1" : "=r"(num)::); // For HDD-OSD, get menu index from s1 register
@@ -583,8 +665,8 @@ void drawMenuItemUnselected(int X, int Y, uint32_t *color, int alpha, const char
 #if !defined(HOSD) && defined(GAMES_MENU)
   if (liveScanActive && (num == 0))
     pollLiveScan();
-  else if (activeMenu && (num == 0) && padBackPressed())
-    closeGamesMenu();
+  else if (activeMenu && (num == 0))
+    handleGamesMenuButtons();
 #endif
 #ifdef HOSD
   asm volatile("move %0, $s1" : "=r"(num)::); // For HDD-OSD, get menu index from s1 register

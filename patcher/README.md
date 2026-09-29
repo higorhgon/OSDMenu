@@ -133,6 +133,12 @@ On each enabled device, Ember must be installed as `EMBER/ember.elf` with its ga
 (one folder per game, with a `.cue` file inside), as described in Ember's documentation.
 When both submenus are enabled, the menu slots left after the regular entries are split evenly between them.
 
+In both submenus:
+- Circle (Cross on Japanese consoles) or Triangle goes back to the main menu
+- Square switches between sorting by name and by most recently played, shown in the "< Back" label.
+  The order is saved in the cache the next time a game is launched or the list is refreshed
+- Left/Right move the cursor a page (`OSDSYS_num_displayed_items`) up or down
+
 These options are also read by the **launcher**:
 - `games_device_usb`, `games_device_mx4sio`, `games_device_mmce` — enable scanning each device type (default: all disabled)
 - `games_cd_folder`, `games_dvd_folder` — folder names (relative to each device's root) to scan for games; both hold PS2 titles, split only by original release media (default: `CD`, `DVD`)

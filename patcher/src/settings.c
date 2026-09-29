@@ -428,11 +428,25 @@ static void loadSubmenuCache(GamesSubmenu *menu, const char *cachePath) {
   cnfPos[cnfSize] = '\0';
 
   char *name, *value;
+  int inList = 0; // Whether the last "game" line fit in the list
   while (getCNFString(&cnfPos, &name, &value)) {
-    if (strcmp(name, "game") || (menu->count >= menu->max))
+    if (!strcmp(name, "sort")) {
+      menu->sortRecent = !strcmp(value, "recent");
+      continue;
+    }
+    if (!strcmp(name, "played")) {
+      if (inList)
+        menu->played[menu->count - 1] = strtoul(value, NULL, 10);
+      continue;
+    }
+    if (strcmp(name, "game"))
       continue;
 
+    inList = (menu->count < menu->max);
+    if (!inList)
+      continue;
     strncpy(settings.menuItemName[menu->base + menu->count], value, NAME_LEN - 1);
+    menu->played[menu->count] = 0;
     menu->count++;
   }
   memset(cnfStart, 0, cnfSize);
@@ -528,6 +542,7 @@ void initConfig(void) {
     settings.submenus[i].max = 0;
     settings.submenus[i].count = 0;
     settings.submenus[i].cacheLoaded = 0;
+    settings.submenus[i].sortRecent = 0;
   }
   settings.reopenSubmenu = 0;
   settings.gamesLiveScan = 0;

@@ -97,6 +97,10 @@ reopen the games submenu right away.
 
 Without a mode (HOSDMenu), the launcher scans and shows its own full-screen list instead.
 
+The mode ends with the submenu's sort order, `r` (most recently played) or `n` (name), which is saved as the
+`sort` line of the cache. Launching a game also gives it a `played` counter higher than any other in the cache,
+and rescanning keeps the counters of the games that are still found.
+
 For each enabled device (`games_device_usb`, `games_device_mx4sio`, `games_device_mmce`), it scans two folders
 relative to the device root: `games_cd_folder` (default `CD`) and `games_dvd_folder` (default `DVD`). Both hold
 **PS2** games — the split is only about the original release media (e.g. Bloody Roar 3 was released on CD), not a

@@ -56,11 +56,14 @@ typedef enum {
 // Game names are stored in menuItemName after the regular menu items, each submenu
 // in its own fixed region of max + 2 slots: the names, then the "< Back" and "Refresh list" labels
 typedef struct {
-  int itemIdx;     // GAMES_MENU_IDX or PSX_MENU_IDX when the entry is shown, -1 otherwise
-  int base;        // First menuItemName slot of the region
-  int max;         // Maximum number of names
-  int count;       // Number of names loaded
-  int cacheLoaded; // Whether the cache file was loaded (or the list was scanned live)
+  int itemIdx;                   // GAMES_MENU_IDX or PSX_MENU_IDX when the entry is shown, -1 otherwise
+  int base;                      // First menuItemName slot of the region
+  int max;                       // Maximum number of names
+  int count;                     // Number of names loaded
+  int cacheLoaded;               // Whether the cache file was loaded (or the list was scanned live)
+  int sortRecent;                // Sort by most recently played instead of by name (toggled with Square)
+  uint32_t played[CUSTOM_ITEMS]; // "played" counter of each game in cache order, 0 if never played
+  uint8_t order[CUSTOM_ITEMS];   // Cache index of the game shown at each position
 } GamesSubmenu;
 
 // Patcher settings struct, contains all configurable patch settings and menu items
