@@ -25,6 +25,9 @@
 // OSDMENU.CNF item index the patcher uses for the automatic "Games >" entry
 #define GAMES_MENU_IDX 9999
 
+// Passed by the launcher to OSDMenu as the last argument to reopen the games submenu
+#define GAMES_REOPEN_ARG "-games"
+
 // Last path the launcher tries to return to OSDMenu after scanning the games
 #ifndef GAMES_DEFAULT_RETURN_PATH
 #define GAMES_DEFAULT_RETURN_PATH "mc?:/BOOT/osdmenu.elf"

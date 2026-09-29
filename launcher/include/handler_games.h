@@ -6,7 +6,7 @@
 #define GAMES_FOLDER_NAME_LEN 32
 
 // Settings parsed from OSDMENU.CNF by handler_osdm.c, consumed by handleGames().
-// neutrinoPath, neutrinoArgs and returnPath are heap-allocated and owned by the caller.
+// neutrinoPath, neutrinoArgs, returnPath and oplPath are heap-allocated and owned by the caller.
 typedef struct {
   int useUSB;
   int useMX4SIO;
@@ -16,6 +16,9 @@ typedef struct {
   char *neutrinoPath;                    // Path to the user-installed neutrino.elf
   linkedStr *neutrinoArgs;               // Extra static arguments appended to every launch
   char *returnPath;                      // ELF to run after scanning instead of OSDMenu itself
+  int useOPL;                            // Launch games with oplPath instead of Neutrino when possible
+  char *oplPath;                         // Path to OPL (e.g. RiptOPL), used when useOPL is set
+  int mmceGameID;                        // Send the game ID to MMCE devices so they switch to the game's memory card
 } GamesConfig;
 
 // handler_games.c

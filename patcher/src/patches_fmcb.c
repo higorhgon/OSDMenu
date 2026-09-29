@@ -102,6 +102,22 @@ static void openGamesMenu(void) {
   gamesMenuActive = 1;
 }
 
+// Opens the games submenu requested by GAMES_REOPEN_ARG once the menu is on screen,
+// with "Games >" as the entry "< Back" returns to
+static void reopenGamesMenu(void) {
+  settings.gamesReopen = 0;
+  if (!settings.gamesCacheLoaded || !menuInfo)
+    return;
+
+  for (int i = 0; i < settings.menuItemCount; i++) {
+    if (settings.menuItemIdx[i] == settings.gamesItemIdx) {
+      menuInfo->currentEntry = 2 + i;
+      openGamesMenu();
+      return;
+    }
+  }
+}
+
 // Restores the regular custom entries and the cursor position
 static void closeGamesMenu(void) {
   for (int i = 0; i < settings.menuItemCount; i++)
@@ -272,6 +288,10 @@ static int fontHeight = 16;
 
 // Draws selected items
 void drawMenuItemSelected(int X, int Y, uint32_t *color, int alpha, const char *string, int num) {
+#ifndef HOSD
+  if (settings.gamesReopen)
+    reopenGamesMenu();
+#endif
 #ifdef HOSD
   asm volatile("move %0, $s1" : "=r"(num)::); // For HDD-OSD, get menu index from s1 register
   num *= 8;                                   // Multiply by 8 to align with OSDSYS behavior
@@ -316,6 +336,10 @@ void drawMenuItemSelected(int X, int Y, uint32_t *color, int alpha, const char *
 
 // Draws unselected items
 void drawMenuItemUnselected(int X, int Y, uint32_t *color, int alpha, const char *string, int num) {
+#ifndef HOSD
+  if (settings.gamesReopen)
+    reopenGamesMenu();
+#endif
 #ifdef HOSD
   asm volatile("move %0, $s1" : "=r"(num)::); // For HDD-OSD, get menu index from s1 register
   num *= 8;                                   // Multiply by 8 to align with OSDSYS behavior

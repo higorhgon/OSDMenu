@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 // Defined in common/defaults.h
 char cnfPath[sizeof(CONF_PATH) + 6] = {0};
@@ -115,6 +116,7 @@ int handleOSDM(int argc, char *argv[]) {
   GamesConfig gamesCfg = {0};
   strcpy(gamesCfg.cdFolder, "CD");
   strcpy(gamesCfg.dvdFolder, "DVD");
+  gamesCfg.mmceGameID = 1;
 #endif
 
   // Temporary path and argument lists
@@ -235,6 +237,19 @@ int handleOSDM(int argc, char *argv[]) {
     if (!strncmp(lineBuffer, "games_return_path", 17)) {
       if (strlen(valuePtr) > 0)
         gamesCfg.returnPath = strdup(valuePtr);
+      continue;
+    }
+    if (!strncmp(lineBuffer, "games_launcher", 14)) {
+      gamesCfg.useOPL = !strcasecmp(valuePtr, "opl");
+      continue;
+    }
+    if (!strncmp(lineBuffer, "games_opl_path", 14)) {
+      if (strlen(valuePtr) > 0)
+        gamesCfg.oplPath = strdup(valuePtr);
+      continue;
+    }
+    if (!strncmp(lineBuffer, "games_mmce_gameid", 17)) {
+      gamesCfg.mmceGameID = atoi(valuePtr);
       continue;
     }
     if (!strncmp(lineBuffer, "games_neutrino_arg", 18)) {

@@ -38,6 +38,13 @@ int main(int argc, char *argv[]) {
   if ((argc > 0) && argv[0])
     strncpy(settings.bootPath, argv[0], sizeof(settings.bootPath) - 1);
 
+  // The launcher asks to reopen the games submenu after scanning or a failed launch.
+  // Strip the argument so it doesn't reach OSDSYS
+  if ((argc > 1) && !strcmp(argv[argc - 1], GAMES_REOPEN_ARG)) {
+    settings.gamesReopen = 1;
+    argc--;
+  }
+
   // Guess MC slot from argv[0]
   if (!strncmp(argv[0], "mc0", 3))
     settings.mcSlot = 0;

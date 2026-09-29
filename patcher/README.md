@@ -132,7 +132,10 @@ These options are also read by the **launcher**:
 - `games_cd_folder`, `games_dvd_folder` — folder names (relative to each device's root) to scan for games; both hold PS2 titles, split only by original release media (default: `CD`, `DVD`)
 - `games_neutrino_path` — path to the installed `neutrino.elf` (required to launch games)
 - `games_neutrino_arg` — extra Neutrino argument passed to every launch, repeatable (e.g. `-gsm=fp2`)
-- `games_return_path` — ELF to run after "Refresh list" or a failed game launch (e.g. `mc?:/BOOT/BOOT.ELF`). When not set, the launcher reopens OSDMenu from the path it was started from, then tries `mc?:/BOOT/osdmenu.elf`, and only falls back to the original OSDSYS if both fail
+- `games_mmce_gameid` — if enabled (default), sends the game's title ID to MMCE devices before launching, so they switch to the game's own memory card (`mmce?:/MemoryCards/PS2/<ID>/<ID>-1.mcd`), like NHDDL does
+- `games_launcher` — `neutrino` (default) or `opl`. With `opl`, games are launched via `games_opl_path` when OPL can autolaunch them, falling back to Neutrino otherwise (see [launcher/README.md](../launcher/README.md#games-handler))
+- `games_opl_path` — path to OPL, e.g. [RiptOPL](https://github.com/NathanNeurotic/Open-PS2-Loader) (required for `games_launcher = opl`)
+- `games_return_path` — ELF to run after "Refresh list" or a failed game launch (e.g. `mc?:/BOOT/BOOT.ELF`). When not set, the launcher reopens OSDMenu (with the games submenu open) from the path it was started from, then tries `mc?:/BOOT/osdmenu.elf`, and only falls back to the original OSDSYS if both fail
 
 To add a custom separator to the menu, add a `name_OSDSYS_ITEM_???` entry that starts with `$!`.  
 This will make the entry inactive, but still show it in the OSD without the `$!` prefix.

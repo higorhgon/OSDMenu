@@ -36,6 +36,9 @@ app_gameid = 0
 # games_dvd_folder = DVD
 # games_neutrino_path = mmce?:/APPS/neutrino/neutrino.elf
 # games_return_path = mc?:/BOOT/osdmenu.elf
+# games_mmce_gameid = 1
+# games_launcher = neutrino
+# games_opl_path = mmce?:/APPS/OPL/RIPTOPL.ELF
 # --------------------------------------------------
 name_OSDSYS_ITEM_1 = Launch Disc
 path1_OSDSYS_ITEM_1 = cdrom

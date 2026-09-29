@@ -78,6 +78,7 @@ typedef struct {
   int gamesCount;       // Number of games loaded from GAMES_CACHE_PATH
   int gamesCacheLoaded; // Whether GAMES_CACHE_PATH existed on boot
   char bootPath[64];    // argv[0] of the patcher, passed to the launcher so it can return to OSDMenu
+  int gamesReopen;      // Open the games submenu as soon as the menu is shown (set by GAMES_REOPEN_ARG)
 #endif
 } PatcherSettings;
 

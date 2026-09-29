@@ -37,6 +37,7 @@
 #define GAMES_NAME_LEN 128
 #define GAMES_REL_PATH_LEN 256
 #define GAMES_MAX_EXTRA_ARGS 8
+#define GAMES_ID_LEN 12 // "SLUS_202.12" + NUL
 
 // Short settle window per mountpoint probe — this scans up to 5 mountpoints
 // (USB x2, MX4SIO x1, MMCE x2), so it deliberately does not reuse
@@ -62,6 +63,7 @@ typedef struct {
   char path[GAMES_REL_PATH_LEN];    // Full path as scanned, e.g. "mmce0:/DVD/Some Game/game.iso"
   const char *neutrinoDriver;       // Neutrino -bsd= driver ("usb"/"mx4sio"/"mmce"), static lifetime
   GameMediaType media;
+  char id[GAMES_ID_LEN];            // Title ID (e.g. "SLUS_202.12"), empty if unknown
 } GameEntry;
 
 typedef struct {
@@ -119,6 +121,112 @@ static void makeDisplayName(const char *src, char *out, size_t outSize) {
     *ext = '\0';
 }
 
+// Looks for a title ID at s, in the "SLUS_202.12"/"SLUS-202.12" or the
+// "SLUS-20212" (PFS BatchKit) form, and writes it to out as "SLUS_202.12"
+static int parseGameID(const char *s, char *out) {
+  for (int i = 0; i < 4; i++)
+    if (!isupper((int)s[i]))
+      return 0;
+
+  if (((s[4] == '_') || (s[4] == '-')) && isdigit((int)s[5]) && isdigit((int)s[6]) && isdigit((int)s[7]) && (s[8] == '.') &&
+      isdigit((int)s[9]) && isdigit((int)s[10])) {
+    memcpy(out, s, 11);
+    out[4] = '_';
+    out[11] = '\0';
+    return 1;
+  }
+
+  if ((s[4] == '-') && isdigit((int)s[5]) && isdigit((int)s[6]) && isdigit((int)s[7]) && isdigit((int)s[8]) && isdigit((int)s[9])) {
+    snprintf(out, GAMES_ID_LEN, "%.4s_%.3s.%.2s", s, &s[5], &s[8]);
+    return 1;
+  }
+  return 0;
+}
+
+// Searches the whole string for a title ID
+static int findGameID(const char *s, char *out) {
+  for (; strlen(s) >= 10; s++)
+    if (parseGameID(s, out))
+      return 1;
+  return 0;
+}
+
+static uint32_t readLE32(const uint8_t *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24); }
+
+// Reads the title ID from the ISO: the BOOT2 line of SYSTEM.CNF, or any
+// title ID-like file name in the root directory as a fallback
+static int getISOGameID(const char *isoPath, char *out) {
+  static uint8_t buf[8192];
+  int found = 0;
+  char fallback[GAMES_ID_LEN] = {0};
+
+  int fd = open(isoPath, O_RDONLY);
+  if (fd < 0)
+    return 0;
+
+  // Primary Volume Descriptor
+  if ((lseek(fd, 16 * 2048, SEEK_SET) < 0) || (read(fd, buf, 2048) != 2048) || (buf[0] != 1) || memcmp(&buf[1], "CD001", 5))
+    goto out;
+
+  // Root directory record starts at offset 156
+  uint32_t rootLBA = readLE32(&buf[156 + 2]);
+  uint32_t rootSize = readLE32(&buf[156 + 10]);
+  if (rootSize > sizeof(buf))
+    rootSize = sizeof(buf);
+  if ((lseek(fd, rootLBA * 2048, SEEK_SET) < 0) || (read(fd, buf, rootSize) != (int)rootSize))
+    goto out;
+
+  uint32_t cnfLBA = 0, cnfSize = 0;
+  char name[64];
+  for (uint32_t off = 0; off < rootSize;) {
+    uint8_t len = buf[off];
+    if (len == 0) { // Records don't cross sector boundaries
+      off = (off / 2048 + 1) * 2048;
+      continue;
+    }
+    if ((len < 34) || (off + len > rootSize))
+      break;
+
+    uint8_t nameLen = buf[off + 32];
+    if (nameLen >= sizeof(name))
+      nameLen = sizeof(name) - 1;
+    memcpy(name, &buf[off + 33], nameLen);
+    name[nameLen] = '\0';
+
+    if (!strncasecmp(name, "SYSTEM.CNF", 10)) {
+      cnfLBA = readLE32(&buf[off + 2]);
+      cnfSize = readLE32(&buf[off + 10]);
+    } else if (!fallback[0])
+      findGameID(name, fallback);
+    off += len;
+  }
+
+  if (cnfLBA) {
+    if (cnfSize > 1023)
+      cnfSize = 1023;
+    if ((lseek(fd, cnfLBA * 2048, SEEK_SET) >= 0) && (read(fd, buf, cnfSize) == (int)cnfSize)) {
+      buf[cnfSize] = '\0';
+      // BOOT2 = cdrom0:\SLUS_202.12;1
+      char *boot = strstr((char *)buf, "BOOT2");
+      if (boot && (boot = strstr(boot, "cdrom0:"))) {
+        boot += 7;
+        while ((*boot == '\\') || (*boot == '/'))
+          boot++;
+        found = parseGameID(boot, out);
+      }
+    }
+  }
+
+  if (!found && fallback[0]) {
+    strcpy(out, fallback);
+    found = 1;
+  }
+
+out:
+  close(fd);
+  return found;
+}
+
 // Adds a game to the in-memory list if there's room left
 static void addGameEntry(const char *dirPath, const char *isoName, const char *displayName, GameMediaType media,
                           const char *neutrinoDriver) {
@@ -133,6 +241,11 @@ static void addGameEntry(const char *dirPath, const char *isoName, const char *d
   snprintf(g->path, GAMES_REL_PATH_LEN, "%s/%s", dirPath, isoName);
   g->neutrinoDriver = neutrinoDriver;
   g->media = media;
+
+  // Title ID from the file or folder name, or from the ISO itself
+  g->id[0] = '\0';
+  if (!findGameID(isoName, g->id) && !findGameID(displayName, g->id))
+    getISOGameID(g->path, g->id);
   gameCount++;
 }
 
@@ -324,13 +437,136 @@ static void drawGameList(int selected) {
   scr_printf(" Cima/Baixo: navegar   X: jogar   Triangulo/Circulo: voltar");
 }
 
-// Builds the neutrino.elf argv and hands off to the existing generic launch
-// pipeline. Only returns on failure.
-// Mirrors NHDDL (pcm720/nhddl, src/launcher.c), which always passes -bsd
-// explicitly with the full mounted ISO path in -dvd ("mmce0:/DVD/game.iso"),
-// so it also works on Neutrino versions that don't auto-detect -bsd from a
-// "<driver>:" prefix — without -bsd those fall back to the physical disc drive.
-static void launchNeutrino(GamesConfig *cfg, const char *bsd, const char *isoPath) {
+// Returns the storage driver bit that must be loaded to access path, if any.
+// Memory cards are part of Device_Basic, which is always loaded.
+static DeviceType storageDevice(char *path) {
+  DeviceType type = guessDeviceType(path);
+  switch (type) {
+  case Device_MMCE:
+  case Device_USB:
+  case Device_MX4SIO:
+  case Device_ATA:
+    return type;
+  default:
+    return Device_None;
+  }
+}
+
+// Launches argv[0]. Only returns on failure.
+// ELFs on memory cards are loaded directly: handleMC() would reload the IOP
+// with the basic modules only, unloading the drivers Neutrino's quickboot needs.
+static void launchGamesELF(int argc, char *argv[]) {
+  if (guessDeviceType(argv[0]) != Device_MemoryCard) {
+    launchPath(argc, argv);
+    return;
+  }
+
+  if (argv[0][2] == '?') {
+    for (char slot = '0'; slot < '2'; slot++) {
+      argv[0][2] = slot;
+      if (!tryFile(argv[0]))
+        break;
+    }
+  }
+  if (!tryFile(argv[0]))
+    LoadELFFromFile(argc, argv);
+}
+
+#ifdef MMCE
+// Sends the title ID to MMCE devices so they switch to the game's memory card
+// (mmce?:/MemoryCards/PS2/<ID>/<ID>-1.mcd), like NHDDL does. Skips the slot
+// elfPath is loaded from, since switching would swap the card under it.
+static void mmceSetGameID(const char *elfPath, const char *id) {
+  char mountpoint[] = "mmceX:";
+  for (char slot = '0'; slot < '2'; slot++) {
+    if (!strncmp(elfPath, "mc", 2) && ((elfPath[2] == slot) || (elfPath[2] == '?')))
+      continue;
+
+    mountpoint[4] = slot;
+    // Ping first to make sure the device is present
+    if (fileXioDevctl(mountpoint, 0x1, NULL, 0, NULL, 0) < 0)
+      continue;
+    if (fileXioDevctl(mountpoint, 0x8, (void *)id, strlen(id) + 1, NULL, 0) < 0)
+      continue;
+
+    // Wait until the device is done switching the card
+    for (int i = 0; i < 15; i++) {
+      sleep(1);
+      if ((fileXioDevctl(mountpoint, 0x2, NULL, 0, NULL, 0) & 1) == 0)
+        break;
+    }
+  }
+}
+#endif
+
+// Returns 1 if OPL can autolaunch the game. OPL's argv autolaunch only
+// supports BDM devices and looks for the ISO directly in the CD/ or DVD/
+// folder, so media must be set to "CD" or "DVD" and fileName to the ISO name.
+static int canLaunchWithOPL(char *isoPath, const char *id, const char **media, const char **fileName) {
+  DeviceType type = guessDeviceType(isoPath);
+  if (((type != Device_USB) && (type != Device_MX4SIO)) || !id[0])
+    return 0;
+
+  const char *rel = strchr(isoPath, ':');
+  if (!rel)
+    return 0;
+  rel++;
+  while (*rel == '/')
+    rel++;
+
+  if (!strncasecmp(rel, "CD/", 3))
+    *media = "CD";
+  else if (!strncasecmp(rel, "DVD/", 4))
+    *media = "DVD";
+  else
+    return 0;
+
+  *fileName = strchr(rel, '/') + 1;
+  return (strchr(*fileName, '/') == NULL); // Games in subfolders are not supported
+}
+
+// Launches the game via OPL or Neutrino. Only returns on failure.
+// Neutrino is started the same way NHDDL (pcm720/nhddl) does it:
+//   neutrino.elf -bsd=<driver> -dvd=<full ISO path, e.g. mmce0:/DVD/game.iso> -qb
+// With -qb, Neutrino uses the IOP modules loaded by the launcher, so the
+// drivers for the ISO and the ELF are loaded together beforehand.
+static void launchGame(GamesConfig *cfg, const char *bsd, char *isoPath, const char *id) {
+  const char *media = NULL;
+  const char *fileName = NULL;
+  int useOPL = 0;
+  if (cfg->useOPL) {
+    if (cfg->oplPath && canLaunchWithOPL(isoPath, id, &media, &fileName))
+      useOPL = 1;
+    else if (cfg->neutrinoPath)
+      msg("Games: OPL can't launch this game, using Neutrino\n");
+  }
+
+  char *elfPath = useOPL ? cfg->oplPath : cfg->neutrinoPath;
+  if (!elfPath) {
+    msg("Games: games_neutrino_path is not set in OSDMENU.CNF\n");
+    return;
+  }
+
+  DeviceType mask = storageDevice(isoPath) | storageDevice(elfPath);
+#ifdef MMCE
+  if (cfg->mmceGameID && id[0])
+    mask |= Device_MMCE;
+#endif
+  if (mask && initModules(mask))
+    return;
+
+#ifdef MMCE
+  if (cfg->mmceGameID && id[0])
+    mmceSetGameID(elfPath, id);
+#endif
+
+  if (useOPL) {
+    // opl.elf <ISO name> <title ID> <CD/DVD> bdm
+    char *argv[] = {elfPath, (char *)fileName, (char *)id, (char *)media, "bdm"};
+    launchGamesELF(5, argv);
+    return;
+  }
+
   char bsdArg[16];
   snprintf(bsdArg, sizeof(bsdArg), "-bsd=%s", bsd);
   char dvdArg[GAMES_REL_PATH_LEN + 8];
@@ -338,7 +574,7 @@ static void launchNeutrino(GamesConfig *cfg, const char *bsd, const char *isoPat
 
   char *argv[4 + GAMES_MAX_EXTRA_ARGS];
   int argc = 0;
-  argv[argc++] = cfg->neutrinoPath;
+  argv[argc++] = elfPath;
   argv[argc++] = bsdArg;
   argv[argc++] = dvdArg;
   argv[argc++] = "-qb";
@@ -349,8 +585,7 @@ static void launchNeutrino(GamesConfig *cfg, const char *bsd, const char *isoPat
     extra = extra->next;
   }
 
-  // If the path is valid, launchPath() never returns
-  launchPath(argc, argv);
+  launchGamesELF(argc, argv);
 }
 
 // Launches the selected entry of the full-screen list. Only returns on failure.
@@ -360,7 +595,7 @@ static void launchSelected(GamesConfig *cfg, int index) {
   scr_setXY(0, GAMES_LIST_START_ROW + GAMES_VISIBLE_ROWS + 2);
   scr_printf(" Iniciando %s...\n", g->name);
 
-  launchNeutrino(cfg, g->neutrinoDriver, g->path);
+  launchGame(cfg, g->neutrinoDriver, g->path, g->id);
 
   scr_printf(" Falha ao iniciar %s\n", g->name);
   sleep(2);
@@ -374,7 +609,7 @@ static void getGamesCachePath(char *path) {
 
 // Writes the scan result to GAMES_CACHE_PATH, which the patcher reads on boot
 // to show the games as an OSDSYS submenu. Each game is a "game" (display name)
-// line followed by its Neutrino "bsd" driver and "dvd" ISO path lines.
+// line followed by its Neutrino "bsd" driver, "dvd" ISO path and optional "id" (title ID) lines.
 static int writeGamesCache(void) {
   char path[sizeof(GAMES_CACHE_PATH)];
   getGamesCachePath(path);
@@ -386,7 +621,8 @@ static int writeGamesCache(void) {
   char line[GAMES_NAME_LEN + GAMES_REL_PATH_LEN + 32];
   int res = 0;
   for (int i = 0; (i < gameCount) && !res; i++) {
-    int len = snprintf(line, sizeof(line), "game = %s\nbsd = %s\ndvd = %s\n", gameList[i].name, gameList[i].neutrinoDriver, gameList[i].path);
+    int len = snprintf(line, sizeof(line), "game = %s\nbsd = %s\ndvd = %s\n%s%s%s", gameList[i].name, gameList[i].neutrinoDriver, gameList[i].path,
+                       gameList[i].id[0] ? "id = " : "", gameList[i].id, gameList[i].id[0] ? "\n" : "");
     if (len >= (int)sizeof(line))
       len = sizeof(line) - 1;
     if (write(fd, line, len) != len)
@@ -407,10 +643,11 @@ static int launchCachedGame(GamesConfig *cfg, int idx) {
     return -ENOENT;
   }
 
-  // Collect the "bsd" and "dvd" lines that follow the idx-th "game" line
+  // Collect the "bsd", "dvd" and "id" lines that follow the idx-th "game" line
   char line[GAMES_REL_PATH_LEN + 32];
   char bsd[16] = {0};
   char isoPath[GAMES_REL_PATH_LEN] = {0};
+  char id[GAMES_ID_LEN] = {0};
   int current = -1;
   while (fgets(line, sizeof(line), file)) {
     char *value = strchr(line, '=');
@@ -429,6 +666,8 @@ static int launchCachedGame(GamesConfig *cfg, int idx) {
         strncpy(bsd, value, sizeof(bsd) - 1);
       else if (!strncmp(line, "dvd", 3))
         strncpy(isoPath, value, sizeof(isoPath) - 1);
+      else if (!strncmp(line, "id", 2))
+        strncpy(id, value, sizeof(id) - 1);
     }
   }
   fclose(file);
@@ -438,8 +677,8 @@ static int launchCachedGame(GamesConfig *cfg, int idx) {
     return -ENOENT;
   }
 
-  launchNeutrino(cfg, bsd, isoPath);
-  msg("Games: failed to launch %s\n", cfg->neutrinoPath);
+  launchGame(cfg, bsd, isoPath, id);
+  msg("Games: failed to launch %s\n", isoPath);
   return -ENOENT;
 }
 
@@ -532,9 +771,11 @@ static void freeGamesConfig(GamesConfig *cfg) {
     freeLinkedStr(cfg->neutrinoArgs);
   if (cfg->returnPath)
     free(cfg->returnPath);
+  if (cfg->oplPath)
+    free(cfg->oplPath);
 }
 
-// Frees cfg and returns to OSDMenu. ExecOSD() alone would boot the ROM OSDSYS,
+// Frees cfg and returns to OSDMenu, reopening the games submenu. ExecOSD() alone would boot the ROM OSDSYS,
 // which doesn't bring OSDMenu back when it was started by a bootloader or an
 // autoboot that only runs on power-on. Tries games_return_path, then the path
 // the patcher was started from, then GAMES_DEFAULT_RETURN_PATH.
@@ -556,9 +797,10 @@ static void returnToMenu(GamesConfig *cfg, const char *patcherPath) {
     if ((type == Device_None) || (type == Device_ROM) || (type == Device_CDROM))
       continue;
 
-    // Only returns if the file can't be launched
-    char *argv[] = {candidates[i]};
-    launchPath(1, argv);
+    // Only returns if the file can't be launched.
+    // "-games" makes OSDMenu reopen the games submenu; not passed to games_return_path
+    char *argv[] = {candidates[i], GAMES_REOPEN_ARG};
+    launchPath((i == 0) ? 1 : 2, argv);
   }
 
   ExecOSD(0, NULL);
@@ -576,7 +818,7 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
   const char *mode = strrchr(arg, ':');
   char modeType = (mode && ((mode[1] == 'g') || (mode[1] == 's'))) ? mode[1] : '\0';
 
-  if ((modeType != 's') && !cfg->neutrinoPath) {
+  if ((modeType != 's') && !cfg->neutrinoPath && !(cfg->useOPL && cfg->oplPath)) {
     msg("Games: games_neutrino_path is not set in OSDMENU.CNF\n");
     sleep(3);
     if (modeType)
@@ -614,6 +856,9 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
     scanMask |= Device_MMCE;
 #endif
 
+  if (modeType == 's')
+    msg("Scanning for games...\n");
+
   int res = initModules(scanMask);
   if (res) {
     msg("Games: Failed to initialize devices: %d\n", res);
@@ -636,7 +881,7 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
     if (res < 0)
       msg("Games: failed to write the games list: %d\n", res);
     else
-      msg("Games: %d jogo%s encontrado%s\n", gameCount, (gameCount == 1) ? "" : "s", (gameCount == 1) ? "" : "s");
+      msg("Found %d game%s\n", gameCount, (gameCount == 1) ? "" : "s");
 
     if (gameCount == 0) {
       printScanDiagnostics(cfg);

@@ -92,6 +92,9 @@ the launcher tries, in order:
 3. `mc?:/BOOT/osdmenu.elf`
 4. the original OSDSYS
 
+OSDMenu is relaunched with `-games` as the last argument (except for `games_return_path`), which makes it
+reopen the games submenu right away.
+
 Without a mode (HOSDMenu), the launcher scans and shows its own full-screen list instead.
 
 For each enabled device (`games_device_usb`, `games_device_mx4sio`, `games_device_mmce`), it scans two folders
@@ -108,10 +111,24 @@ An OPL-style title ID prefix and the `.iso` extension are hidden from display na
 (`SLUS_202.12.BLOODY ROAR 3.iso` is shown as `BLOODY ROAR 3`).
 ISO images split into multiple part files are not supported, since Neutrino doesn't support them either.
 
-Selecting a game launches `games_neutrino_path` (required) the same way [NHDDL](https://github.com/pcm720/nhddl) does:
+The title ID of each game (e.g. `SLUS_202.12`) is taken from the ISO file or folder name (`SLUS_202.12.Name.iso`,
+`SLUS-20212`) or, if it isn't there, from the `BOOT2` line of `SYSTEM.CNF` inside the ISO, and stored in the cache.
+Before launching, the drivers for the ISO and the ELF are loaded, and the title ID is sent to MMCE devices
+(`games_mmce_gameid`, enabled by default) so they switch to the game's memory card, like NHDDL does.
+The slot the ELF is loaded from is skipped when the ELF is on a memory card (`mc?:`).
+
+Selecting a game launches `games_neutrino_path` the same way [NHDDL](https://github.com/pcm720/nhddl) does:
 ```
 neutrino.elf -bsd=<usb|mx4sio|mmce> -dvd=<full ISO path, e.g. mmce0:/DVD/game.iso> -qb [games_neutrino_arg ...]
 ```
+
+With `games_launcher = opl`, `games_opl_path` (e.g. [RiptOPL](https://github.com/NathanNeurotic/Open-PS2-Loader)) is
+launched instead using OPL's argv autolaunch:
+```
+opl.elf <ISO file name> <title ID> <CD|DVD> bdm
+```
+OPL only supports this for BDM devices (USB/MX4SIO) and looks for the ISO directly in the `CD/` or `DVD/` folder of the
+first BDM device, so games on MMCE, in subfolders, in custom folders or without a known title ID fall back to Neutrino.
 
 **Neutrino v1.8.0 and MMCE**: v1.8.0 takes the MMCE slot from the *last* digit anywhere in the ISO path instead of
 the one before `:`, so ISOs with digits in their name (e.g. `Bloody Roar 3.iso`) hang on a black screen when loaded
