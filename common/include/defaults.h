@@ -16,6 +16,12 @@
 #define GSM_CONF_PATH "mc0:/SYS-CONF/OSDGSM.CNF"
 #endif
 
+// Games menu cache: written by the launcher after scanning CD/DVD folders,
+// read by the patcher on boot to populate the games submenu.
+#ifndef GAMES_CACHE_PATH
+#define GAMES_CACHE_PATH "mc0:/SYS-CONF/OSDGAMES.CNF"
+#endif
+
 #ifndef DKWDRV_PATH
 #define DKWDRV_PATH "mc0:/BOOT/DKWDRV.ELF"
 #endif

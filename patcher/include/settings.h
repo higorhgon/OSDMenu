@@ -72,6 +72,11 @@ typedef struct {
 #ifndef HOSD
   char dkwdrvPath[50]; // Path to DKWDRV
   uint8_t mcSlot;      // Memory card slot contaning currently loaded OSDMENU.CNF
+  // Games submenu. Game names are stored in menuItemName right after the
+  // regular menu items, followed by the "back" and "refresh" labels.
+  int gamesItemIdx;     // CNF index of the entry with path "games", -1 if none
+  int gamesCount;       // Number of games loaded from GAMES_CACHE_PATH
+  int gamesCacheLoaded; // Whether GAMES_CACHE_PATH existed on boot
 #endif
 } PatcherSettings;
 
@@ -80,5 +85,9 @@ extern PatcherSettings settings;
 
 int loadConfig(void);
 void initConfig(void);
+#ifndef HOSD
+// Loads game names for the games submenu from GAMES_CACHE_PATH
+void loadGamesCache(void);
+#endif
 
 #endif

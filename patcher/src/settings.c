@@ -221,6 +221,12 @@ int loadConfig(void) {
       continue;
     }
 #ifndef HOSD
+    if (!strncmp(name, "path", 4) && !strcmp(value, "games")) {
+      char *idx = strrchr(name, '_');
+      if (idx)
+        settings.gamesItemIdx = atoi(idx + 1);
+      continue;
+    }
     if (!strcmp(name, "path_DKWDRV_ELF")) {
       if (strlen(value) < 4 || strncmp(value, "mc", 2))
         continue; // Accept only memory card paths
@@ -340,6 +346,54 @@ int loadConfig(void) {
   return 0;
 }
 
+#ifndef HOSD
+// Loads game names for the games submenu from GAMES_CACHE_PATH (written by the
+// launcher after a scan) into menuItemName, right after the regular items
+void loadGamesCache(void) {
+  if (settings.gamesItemIdx < 0)
+    return;
+
+  // Two slots are reserved for the "back" and "refresh" labels.
+  // Without room for them, the entry falls back to the launcher's own list.
+  int maxGames = CUSTOM_ITEMS - settings.menuItemCount - 2;
+  if (maxGames < 0) {
+    settings.gamesItemIdx = -1;
+    return;
+  }
+
+  char path[] = GAMES_CACHE_PATH;
+  if (settings.mcSlot == 1)
+    path[2] = '1';
+
+  int fd = fioOpen(path, FIO_O_RDONLY);
+  if (fd < 0)
+    return;
+
+  // Same scratch area as loadConfig(), which is done with it by now
+  char *cnfPos = (void *)0x1000000;
+  char *cnfStart = cnfPos;
+  size_t cnfSize = fioLseek(fd, 0, FIO_SEEK_END);
+  fioLseek(fd, 0, FIO_SEEK_SET);
+  fioRead(fd, cnfPos, cnfSize);
+  fioClose(fd);
+  cnfPos[cnfSize] = '\0';
+
+  char *name, *value;
+  while (getCNFString(&cnfPos, &name, &value)) {
+    if (strcmp(name, "game") || (settings.gamesCount >= maxGames))
+      continue;
+
+    strncpy(settings.menuItemName[settings.menuItemCount + settings.gamesCount], value, NAME_LEN - 1);
+    settings.gamesCount++;
+  }
+  memset(cnfStart, 0, cnfSize);
+
+  strcpy(settings.menuItemName[settings.menuItemCount + settings.gamesCount], "< Voltar");
+  strcpy(settings.menuItemName[settings.menuItemCount + settings.gamesCount + 1], "Atualizar lista");
+  settings.gamesCacheLoaded = 1;
+}
+#endif
+
 // Initializes static variables
 void initVariables() {
   // Init ROMVER
@@ -387,6 +441,9 @@ void initConfig(void) {
 #ifndef HOSD
   settings.dkwdrvPath[0] = '\0'; // Can be null
   settings.mcSlot = 0;
+  settings.gamesItemIdx = -1;
+  settings.gamesCount = 0;
+  settings.gamesCacheLoaded = 0;
 #endif
 
   initVariables();

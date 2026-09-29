@@ -26,29 +26,29 @@ struct OSDMenuInfo {
 static struct OSDMenuInfo *menuInfo = NULL;
 #define OSD_MAGIC 0x39390000 // arbitrary number to identify added menu items
 
-// Handles custom menu entries
-int handleMenuEntry(int selected) {
-  if (selected == 1)
-    return 1;
+#ifndef HOSD
+// Whether the games submenu currently replaces the custom menu entries
+static int gamesMenuActive = 0;
+#endif
 
-  if (selected >= 2 + settings.menuItemCount)
-    return 0;
+// Number of custom entries currently shown after "Browser" and "System Configuration"
+static int customItemCount(void) {
+#ifndef HOSD
+  if (gamesMenuActive)
+    return settings.gamesCount + 2; // games + "back" + "refresh"
+#endif
+  return settings.menuItemCount;
+}
 
-  if (selected - 2 < 0)
-    return 0;
-
-  if (settings.menuItemName[selected - 2][0] == '$' && settings.menuItemName[selected - 2][1] == '!')
-    return 0;
-
-  // Build the item string for the launcher
-  int idx = settings.menuItemIdx[selected - 2];
-
-  char item[28] = {0};
+// Launches the launcher for the OSDMENU.CNF entry with the given index.
+// suffix is appended to the osdm path and interpreted by the launcher's games handler
+static void launchMenuItem(int idx, const char *suffix) {
+  char item[48] = {0};
 #ifdef EMBED_CNF
   // osdm:a<8-char address>:<8-char CNF size>:<3-char idx>
   // Relocate the CNF file to the memory unused by the launcher code
   memcpy((void *)(EXTRA_RELOC_ADDR + size_launcher_elf), (void *)embedded_cnf, size_embedded_cnf);
-  sprintf(item, "osdm:a%08lX:%08lX:%d", (uint32_t)(EXTRA_RELOC_ADDR + size_launcher_elf), (uint32_t)size_embedded_cnf, idx);
+  sprintf(item, "osdm:a%08lX:%08lX:%d%s", (uint32_t)(EXTRA_RELOC_ADDR + size_launcher_elf), (uint32_t)size_embedded_cnf, idx, suffix);
 #else
   // osdm:d<1-char slot>:<3-char idx>
 #ifndef HOSD
@@ -56,10 +56,110 @@ int handleMenuEntry(int selected) {
 #else
   int slot = 9;
 #endif
-  sprintf(item, "osdm:d%d:%d", slot, idx);
+  sprintf(item, "osdm:d%d:%d%s", slot, idx, suffix);
 #endif
 
   launchItem(item);
+}
+
+#ifndef HOSD
+static uint32_t gamesMenuReturnEntry = 0;
+static int menuUsesStringPointers = 0; // Protokernel menus store string pointers instead of string indices
+
+// Points custom menu entry pos (0-based, after "Browser" and "System Configuration") at menuItemName[slot]
+static void setMenuEntry(int pos, int slot) {
+  if (menuUsesStringPointers) {
+    osdMenu[4 + pos * 2] = (uint32_t)settings.menuItemName[slot];
+    osdMenu[5 + pos * 2] = (uint32_t)settings.menuItemName[slot];
+  } else {
+    osdMenu[4 + pos * 2] = OSD_MAGIC + slot;
+    osdMenu[5 + pos * 2] = 0;
+  }
+}
+
+// Replaces the custom entries with "< Voltar", the cached games and "Atualizar lista".
+// OSDSYS reads the entry table and cursor from menuInfo every frame, so this takes
+// effect immediately without leaving the OSD
+static void openGamesMenu(void) {
+  int base = settings.menuItemCount;
+  int pos = 0;
+  setMenuEntry(pos++, base + settings.gamesCount); // "< Voltar"
+  for (int i = 0; i < settings.gamesCount; i++)
+    setMenuEntry(pos++, base + i);
+  setMenuEntry(pos++, base + settings.gamesCount + 1); // "Atualizar lista"
+
+  gamesMenuReturnEntry = menuInfo->currentEntry;
+  menuInfo->entryCount = 2 + pos;
+  menuInfo->currentEntry = 3; // First game, or "Atualizar lista" when there are none
+  gamesMenuActive = 1;
+}
+
+// Restores the regular custom entries and the cursor position
+static void closeGamesMenu(void) {
+  for (int i = 0; i < settings.menuItemCount; i++)
+    setMenuEntry(i, i);
+
+  menuInfo->entryCount = 2 + settings.menuItemCount;
+  menuInfo->currentEntry = gamesMenuReturnEntry;
+  gamesMenuActive = 0;
+}
+
+// Handles X on an entry of the games submenu
+static void handleGamesMenuEntry(int pos) {
+  if (pos == 0) {
+    closeGamesMenu();
+    return;
+  }
+
+  if (pos == settings.gamesCount + 1) {
+    launchMenuItem(settings.gamesItemIdx, ":s"); // Rescan
+    return;
+  }
+
+  char suffix[16];
+  sprintf(suffix, ":g%d", pos - 1);
+  launchMenuItem(settings.gamesItemIdx, suffix);
+}
+#endif
+
+// Handles custom menu entries
+int handleMenuEntry(int selected) {
+  if (selected == 1)
+    return 1;
+
+  int pos = selected - 2;
+  if (pos < 0)
+    return 0;
+
+#ifndef HOSD
+  if (gamesMenuActive) {
+    if (pos < customItemCount())
+      handleGamesMenuEntry(pos);
+    return 0;
+  }
+#endif
+
+  if (pos >= settings.menuItemCount)
+    return 0;
+
+  if (settings.menuItemName[pos][0] == '$' && settings.menuItemName[pos][1] == '!')
+    return 0;
+
+  int idx = settings.menuItemIdx[pos];
+
+#ifndef HOSD
+  if (idx == settings.gamesItemIdx) {
+    if (settings.gamesCacheLoaded) {
+      openGamesMenu();
+      return 0;
+    }
+    // No cache yet: the launcher scans, writes it and returns to the OSD
+    launchMenuItem(idx, ":s");
+    return 0;
+  }
+#endif
+
+  launchMenuItem(idx, "");
   return 0;
 }
 
@@ -177,7 +277,7 @@ void drawMenuItemSelected(int X, int Y, uint32_t *color, int alpha, const char *
     alpha = 0x80;
 
   if (!(settings.patcherFlags & FLAG_SCROLL_MENU)) { // Old style menu
-    DrawMenuItem(settings.menuX, Y - settings.menuItemCount * 10, colorSelected, alpha, string);
+    DrawMenuItem(settings.menuX, Y - customItemCount() * 10, colorSelected, alpha, string);
   } else { // New style menu
     if (num == 0) {
       int amount;
@@ -218,7 +318,7 @@ void drawMenuItemUnselected(int X, int Y, uint32_t *color, int alpha, const char
     colorUnselected[i] = settings.colorUnselected[i];
 
   if (!(settings.patcherFlags & FLAG_SCROLL_MENU)) { // Old style menu
-    DrawMenuItem(settings.menuX, Y - settings.menuItemCount * 10, colorUnselected, alpha, string);
+    DrawMenuItem(settings.menuX, Y - customItemCount() * 10, colorUnselected, alpha, string);
   } else { // New style menu
     if (num == 0) {
       int amount, destY = menuInfo->currentEntry << 4;
@@ -651,6 +751,7 @@ void patchMenuProtokernel(uint8_t *osd) {
   }
   menuAddr = (uint32_t)ptr - 4;
   menuInfo = (struct OSDMenuInfo *)menuAddr;
+  menuUsesStringPointers = 1;
 
   ptr = findPatternWithMask(osd + PROTOKERNEL_MENU_OFFSET, 0x100000, (uint8_t *)patternUserInputHandler, (uint8_t *)patternUserInputHandler_mask,
                             sizeof(patternUserInputHandler));

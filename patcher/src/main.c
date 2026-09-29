@@ -47,6 +47,7 @@ int main(int argc, char *argv[]) {
   if (!isPSX) {
     // If not, read config file
     loadConfig();
+    loadGamesCache();
     showSplash();
     // Try to load OSDR
     loadOSDR();

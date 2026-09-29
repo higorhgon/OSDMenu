@@ -74,10 +74,18 @@ Additionally, the launcher supports parsing the configuration from an arbitrary 
 Respects `cdrom_skip_ps2logo`, `cdrom_disable_gameid` and `cdrom_use_dkwdrv` for `cdrom` paths, but only if there are no custom arguments for this entry (`arg_OSDSYS_ITEM`).
 
 ### `games` handler
-When the launcher receives `games` as `argv[0]` (via the `osdm` handler's special path resolution), it shows a
-built-in, full-screen list of PS2 games, drawn by the launcher itself (not OPL's or Neutrino's own UI), and launches
-the selected title via a user-installed standalone [Neutrino](https://github.com/rickgaiser/neutrino) (`neutrino.elf`,
-not bundled with OSDMenu).
+Handles OSDMENU.CNF entries whose path is `games` (via the `osdm` handler's special path resolution) and launches
+PS2 games via a user-installed standalone [Neutrino](https://github.com/rickgaiser/neutrino) (`neutrino.elf`, not
+bundled with OSDMenu).
+
+In OSDMenu, the games are shown as a submenu of the OSDSYS menu itself. Scanning storage devices is not possible
+from within OSDSYS, so the launcher does it and caches the result in `mc?:/SYS-CONF/OSDGAMES.CNF` (on the memory card
+`OSDMENU.CNF` was loaded from), which the patcher reads on boot. The patcher appends a mode to the `osdm` path:
+- `osdm:d<slot>:<idx>:s` — scans the devices, writes the cache and returns to the OSD. Used by the "Atualizar lista"
+  submenu entry, and when the entry is opened for the first time without a cache
+- `osdm:d<slot>:<idx>:g<N>` — launches game `N` from the cache without scanning
+
+Without a mode (HOSDMenu), the launcher scans and shows its own full-screen list instead.
 
 The scan only runs when this entry is opened — it adds no cost to normal boot.
 

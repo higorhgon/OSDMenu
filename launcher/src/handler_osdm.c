@@ -282,7 +282,7 @@ int handleOSDM(int argc, char *argv[]) {
     if (settings.dkwdrvPath)
       free(settings.dkwdrvPath);
 
-    return handleGames(&gamesCfg);
+    return handleGames(&gamesCfg, argv[0]);
   }
 #endif
 

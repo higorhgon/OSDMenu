@@ -19,10 +19,12 @@ typedef struct {
 
 // handler_games.c
 //
-// Scans the configured CD/DVD folders on the enabled devices (USB/MX4SIO/MMCE),
-// shows a full-screen list and launches the selected game via neutrino.elf.
-// Only returns on error; on success or when the user backs out, control passes
-// to launchPath()/ExecOSD() and never returns.
-int handleGames(GamesConfig *cfg);
+// osdmArg is the osdm path that led here. The patcher appends a mode suffix:
+//   ":s"  - scan the configured CD/DVD folders on the enabled devices
+//           (USB/MX4SIO/MMCE), write GAMES_CACHE_PATH and return to the OSD
+//   ":gN" - launch game N from GAMES_CACHE_PATH via neutrino.elf, no scan
+// Without a suffix (e.g. HOSDMenu), scans and shows a full-screen list instead.
+// Only returns on error; otherwise control passes to launchPath()/ExecOSD().
+int handleGames(GamesConfig *cfg, const char *osdmArg);
 
 #endif

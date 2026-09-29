@@ -125,7 +125,7 @@ DKWDRV and custom payload paths are limited to 49 characters.
 
 #### Games menu
 
-Adding an entry with `path1_OSDSYS_ITEM_???` set to `games` opens a built-in list of PS2 games found on USB/MX4SIO/MMCE devices, launched via a user-installed standalone [Neutrino](https://github.com/rickgaiser/neutrino) (`neutrino.elf`, not bundled with OSDMenu). The list is only scanned when this entry is opened — it adds no boot-time cost otherwise. See [launcher/README.md](../launcher/README.md#games-handler) for the full option list, scan rules and current limitations (no cover art, no PS1 support, no network/SMB storage).
+Adding an entry with `path1_OSDSYS_ITEM_???` set to `games` opens a submenu with PS2 games found on USB/MX4SIO/MMCE devices, launched via a user-installed standalone [Neutrino](https://github.com/rickgaiser/neutrino) (`neutrino.elf`, not bundled with OSDMenu). The list is cached in `mc?:/SYS-CONF/OSDGAMES.CNF` and only rescanned when it doesn't exist yet or when "Atualizar lista" is selected, so it adds no boot-time cost beyond reading that file. "< Voltar" returns to the main menu. HOSDMenu shows a full-screen list from the launcher instead. See [launcher/README.md](../launcher/README.md#games-handler) for the full option list, scan rules and current limitations (no cover art, no PS1 support, no network/SMB storage).
 
 These options are read by the **launcher**, not the patcher, so they don't count against the `OSDMENU.CNF` item/character limits described above:
 - `games_device_usb`, `games_device_mx4sio`, `games_device_mmce` — enable/disable scanning each device type (default: all enabled)

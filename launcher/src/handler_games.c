@@ -1,4 +1,5 @@
 #include "common.h"
+#include "defaults.h"
 #include "dprintf.h"
 #include "handler_games.h"
 #include "handlers.h"
@@ -328,13 +329,11 @@ static void drawGameList(int selected) {
   scr_printf(" Cima/Baixo: navegar   X: jogar   Triangulo/Circulo: voltar");
 }
 
-// Builds the neutrino.elf argv for the selected game and hands off to the
-// existing generic launch pipeline. Only returns on failure.
-static void launchSelected(GamesConfig *cfg, int index) {
-  GameEntry *g = &gameList[index];
-
+// Builds the neutrino.elf argv for dvdTarget ("<driver>:<path>") and hands off
+// to the existing generic launch pipeline. Only returns on failure.
+static void launchNeutrino(GamesConfig *cfg, const char *dvdTarget) {
   char dvdArg[GAMES_REL_PATH_LEN + 32];
-  snprintf(dvdArg, sizeof(dvdArg), "-dvd=%s:%s", g->neutrinoDriver, g->relPath);
+  snprintf(dvdArg, sizeof(dvdArg), "-dvd=%s", dvdTarget);
 
   char *argv[3 + GAMES_MAX_EXTRA_ARGS];
   int argc = 0;
@@ -348,14 +347,93 @@ static void launchSelected(GamesConfig *cfg, int index) {
     extra = extra->next;
   }
 
+  // If the path is valid, launchPath() never returns
+  launchPath(argc, argv);
+}
+
+// Launches the selected entry of the full-screen list. Only returns on failure.
+static void launchSelected(GamesConfig *cfg, int index) {
+  GameEntry *g = &gameList[index];
+
+  char dvdTarget[GAMES_REL_PATH_LEN + 16];
+  snprintf(dvdTarget, sizeof(dvdTarget), "%s:%s", g->neutrinoDriver, g->relPath);
+
   scr_setXY(0, GAMES_LIST_START_ROW + GAMES_VISIBLE_ROWS + 2);
   scr_printf(" Iniciando %s...\n", g->name);
 
-  // If the path is valid, launchPath() never returns
-  launchPath(argc, argv);
+  launchNeutrino(cfg, dvdTarget);
 
   scr_printf(" Falha ao iniciar %s\n", g->name);
   sleep(2);
+}
+
+// Returns GAMES_CACHE_PATH on the memory card OSDMENU.CNF was loaded from
+static void getGamesCachePath(char *path) {
+  strcpy(path, GAMES_CACHE_PATH);
+  path[2] = (settings.mcHint == 1) ? '1' : '0';
+}
+
+// Writes the scan result to GAMES_CACHE_PATH, which the patcher reads on boot
+// to show the games as an OSDSYS submenu. Each game is a "game" (display name)
+// line followed by a "path" (Neutrino -dvd= target) line.
+static int writeGamesCache(void) {
+  char path[sizeof(GAMES_CACHE_PATH)];
+  getGamesCachePath(path);
+
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC);
+  if (fd < 0)
+    return fd;
+
+  char line[GAMES_NAME_LEN + GAMES_REL_PATH_LEN + 32];
+  int res = 0;
+  for (int i = 0; (i < gameCount) && !res; i++) {
+    int len = snprintf(line, sizeof(line), "game = %s\npath = %s:%s\n", gameList[i].name, gameList[i].neutrinoDriver, gameList[i].relPath);
+    if (len >= (int)sizeof(line))
+      len = sizeof(line) - 1;
+    if (write(fd, line, len) != len)
+      res = -EIO;
+  }
+  close(fd);
+  return res;
+}
+
+// Launches game idx from GAMES_CACHE_PATH without scanning. Only returns on failure.
+static int launchCachedGame(GamesConfig *cfg, int idx) {
+  char path[sizeof(GAMES_CACHE_PATH)];
+  getGamesCachePath(path);
+
+  FILE *file = fopen(path, "r");
+  if (!file) {
+    msg("Games: failed to open %s\n", path);
+    return -ENOENT;
+  }
+
+  char line[GAMES_REL_PATH_LEN + 32];
+  char *dvdTarget = NULL;
+  int current = 0;
+  while (fgets(line, sizeof(line), file)) {
+    if (strncmp(line, "path", 4) || (current++ != idx))
+      continue;
+
+    dvdTarget = strchr(line, '=');
+    if (!dvdTarget)
+      break;
+    do {
+      dvdTarget++;
+    } while (isspace((int)*dvdTarget));
+    dvdTarget[strcspn(dvdTarget, "\r\n")] = '\0';
+    break;
+  }
+  fclose(file);
+
+  if (!dvdTarget || (dvdTarget[0] == '\0')) {
+    msg("Games: game %d not found in %s, try refreshing the list\n", idx, path);
+    return -ENOENT;
+  }
+
+  launchNeutrino(cfg, dvdTarget);
+  msg("Games: failed to launch %s\n", cfg->neutrinoPath);
+  return -ENOENT;
 }
 
 // Initializes a single controller for menu navigation
@@ -447,8 +525,12 @@ static void freeGamesConfig(GamesConfig *cfg) {
     freeLinkedStr(cfg->neutrinoArgs);
 }
 
-int handleGames(GamesConfig *cfg) {
-  if (!cfg->neutrinoPath) {
+int handleGames(GamesConfig *cfg, const char *osdmArg) {
+  // Mode suffix appended by the patcher's games submenu, see handler_games.h
+  const char *mode = strrchr(osdmArg, ':');
+  char modeType = (mode && ((mode[1] == 'g') || (mode[1] == 's'))) ? mode[1] : '\0';
+
+  if ((modeType != 's') && !cfg->neutrinoPath) {
     msg("Games: games_neutrino_path is not set in OSDMENU.CNF\n");
     sleep(3);
     freeGamesConfig(cfg);
@@ -456,12 +538,20 @@ int handleGames(GamesConfig *cfg) {
     return -EINVAL;
   }
 
+  if (modeType == 'g') {
+    int res = launchCachedGame(cfg, atoi(mode + 2));
+    sleep(5);
+    freeGamesConfig(cfg);
+    ExecOSD(0, NULL);
+    return res;
+  }
+
   // Device_Basic must not be in this mask: handleOSDM() has already loaded
   // Device_Basic | Device_CDROM, and initModules() returns early if *any* bit
   // of the requested mask is already loaded, which would skip loading the
   // storage drivers and padman entirely. Basic modules are always reloaded
-  // on every IOP reset anyway.
-  DeviceType scanMask = Device_Games; // Device_Games loads padman
+  // on every IOP reset anyway. padman is only needed for the full-screen list.
+  DeviceType scanMask = (modeType == 's') ? Device_None : Device_Games;
 #ifdef USB
   if (cfg->useUSB)
     scanMask |= Device_USB;
@@ -485,6 +575,26 @@ int handleGames(GamesConfig *cfg) {
   }
 
   scanAllDevices(cfg);
+
+  if (modeType == 's') {
+    // Write the cache even when empty, so the submenu opens with just
+    // "< Voltar"/"Atualizar lista" instead of rescanning on every open
+    res = writeGamesCache();
+    if (res < 0)
+      msg("Games: failed to write the games list: %d\n", res);
+    else
+      msg("Games: %d jogo%s encontrado%s\n", gameCount, (gameCount == 1) ? "" : "s", (gameCount == 1) ? "" : "s");
+
+    if (gameCount == 0) {
+      printScanDiagnostics(cfg);
+      sleep(15);
+    } else
+      sleep((res < 0) ? 5 : 1);
+
+    freeGamesConfig(cfg);
+    ExecOSD(0, NULL);
+    return res;
+  }
 
   if (gameCount == 0) {
     msg("Games: No games found in %s/%s folders\n", cfg->cdFolder, cfg->dvdFolder);
