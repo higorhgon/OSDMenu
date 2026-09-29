@@ -228,8 +228,28 @@ int loadConfig(void) {
     if (!strncmp(name, "games_device_", 13)) {
       if (atoi(value))
         gamesEnabled = 1;
+#ifndef HOSD
+      if (!strcmp(name, "games_device_mmce"))
+        settings.gamesUseMMCE = atoi(value);
+#endif
       continue;
     }
+#ifndef HOSD
+    if (!strcmp(name, "games_live_scan")) {
+      settings.gamesLiveScan = atoi(value);
+      continue;
+    }
+    if (!strcmp(name, "games_cd_folder")) {
+      if (value[0])
+        strncpy(settings.gamesCdFolder, value, sizeof(settings.gamesCdFolder) - 1);
+      continue;
+    }
+    if (!strcmp(name, "games_dvd_folder")) {
+      if (value[0])
+        strncpy(settings.gamesDvdFolder, value, sizeof(settings.gamesDvdFolder) - 1);
+      continue;
+    }
+#endif
 #endif
 #ifndef HOSD
     if (!strcmp(name, "path_DKWDRV_ELF")) {
@@ -462,6 +482,10 @@ void initConfig(void) {
   settings.mcSlot = 0;
   settings.gamesItemIdx = -1;
   settings.gamesCount = 0;
+  settings.gamesLiveScan = 0;
+  settings.gamesUseMMCE = 0;
+  strcpy(settings.gamesCdFolder, "CD");
+  strcpy(settings.gamesDvdFolder, "DVD");
   settings.gamesCacheLoaded = 0;
 #endif
 

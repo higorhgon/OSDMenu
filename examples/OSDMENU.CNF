@@ -39,6 +39,7 @@ app_gameid = 0
 # games_mmce_gameid = 1
 # games_launcher = neutrino
 # games_opl_path = mmce?:/APPS/OPL/RIPTOPL.ELF
+# games_live_scan = 0
 # --------------------------------------------------
 name_OSDSYS_ITEM_1 = Launch Disc
 path1_OSDSYS_ITEM_1 = cdrom

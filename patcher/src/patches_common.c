@@ -169,6 +169,11 @@ void patchExecuteOSDSYS(void *epc, void *gp, int argc, char *argv[]) {
     sceUmount = (void *)ptr;
 #endif
 
+#ifdef LIVESCAN
+  if (settings.gamesLiveScan && settings.gamesUseMMCE)
+    loadLiveScanModules();
+#endif
+
   if ((void *)launcher_elf_addr == (void *)EXTRA_RELOC_ADDR) {
     // Relocate the embedded launcher back to USER_MEM_START_ADDR to avoid OSD code overwriting it
     memcpy((void *)USER_MEM_START_ADDR, launcher_elf_addr, size_launcher_elf);

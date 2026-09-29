@@ -7,6 +7,11 @@
 #include "patches_osdmenu.h"
 #include "patterns_fmcb.h"
 #include "settings.h"
+#ifdef GAMES_MENU
+#include "defaults.h"
+#include "livescan.h"
+#include <stddef.h>
+#endif
 #include <kernel.h>
 #include <loadfile.h>
 #include <stdio.h>
@@ -29,11 +34,15 @@ static struct OSDMenuInfo *menuInfo = NULL;
 #ifndef HOSD
 // Whether the games submenu currently replaces the custom menu entries
 static int gamesMenuActive = 0;
+// Whether the games submenu only shows "Scanning..." (games_live_scan)
+static int liveScanActive = 0;
 #endif
 
 // Number of custom entries currently shown after "Browser" and "System Configuration"
 static int customItemCount(void) {
 #ifndef HOSD
+  if (gamesMenuActive && liveScanActive)
+    return 1; // "Scanning..."
   if (gamesMenuActive)
     return settings.gamesCount + 2; // games + "back" + "refresh"
 #endif
@@ -85,10 +94,10 @@ static void setMenuEntry(int pos, int slot) {
   }
 }
 
-// Replaces the custom entries with "< Back", the cached games and "Refresh list".
+// Shows "< Back", the games and "Refresh list" as the custom entries.
 // OSDSYS reads the entry table and cursor from menuInfo every frame, so this takes
 // effect immediately without leaving the OSD
-static void openGamesMenu(void) {
+static void showGamesEntries(void) {
   int base = settings.menuItemCount;
   int pos = 0;
   setMenuEntry(pos++, base + settings.gamesCount); // "< Back"
@@ -96,11 +105,171 @@ static void openGamesMenu(void) {
     setMenuEntry(pos++, base + i);
   setMenuEntry(pos++, base + settings.gamesCount + 1); // "Refresh list"
 
-  gamesMenuReturnEntry = menuInfo->currentEntry;
   menuInfo->entryCount = 2 + pos;
   menuInfo->currentEntry = 3; // First game, or "Refresh list" when there are none
+}
+
+// Replaces the custom entries with the games submenu
+static void openGamesMenu(void) {
+  gamesMenuReturnEntry = menuInfo->currentEntry;
+  showGamesEntries();
   gamesMenuActive = 1;
 }
+
+#ifdef GAMES_MENU
+//
+// Experimental live scan (games_live_scan), see livescan.h.
+// gamescan.irx is loaded before OSDSYS starts and is controlled by writing
+// directly into its LiveScanShared structure in IOP RAM, since the patcher
+// can't use SIF RPC while OSDSYS is running.
+//
+#define LIVESCAN_TIMEOUT_FRAMES (60 * 60) // ~60 seconds
+#define LIVESCAN_HEARTBEAT_FRAMES 90      // ~1.5 seconds
+
+static uint32_t liveScanAddr = 0; // LiveScanShared address in the EE's view of IOP RAM
+static int liveScanDisabled = 0;  // Set after a failure, "Refresh list" then uses the launcher
+static int liveScanFrames = 0;
+static uint32_t liveScanHeartbeat = 0;
+
+// Writes the "< Back" and "Refresh list" labels after the games
+static void setGamesLabels(const char *refreshLabel) {
+  int base = settings.menuItemCount + settings.gamesCount;
+  strcpy(settings.menuItemName[base], "< Back");
+  snprintf(settings.menuItemName[base + 1], NAME_LEN, "%s", refreshLabel);
+}
+
+// IOP RAM is accessed with 32-bit uncached reads and writes only
+#define LIVESCAN_FIELD(field) (liveScanAddr + offsetof(LiveScanShared, field))
+static inline uint32_t iopRead(uint32_t addr) { return *(volatile uint32_t *)addr; }
+static inline void iopWrite(uint32_t addr, uint32_t value) { *(volatile uint32_t *)addr = value; }
+
+// Writes str into a NUL-padded field of size bytes (a multiple of 4)
+static void iopWriteString(uint32_t addr, const char *str, int size) {
+  for (int i = 0; i < size; i += 4) {
+    uint32_t word = 0;
+    for (int j = 0; j < 4; j++) {
+      char c = ((i + j) < (size - 1)) ? *str : '\0';
+      if (c)
+        str++;
+      word |= (uint32_t)(uint8_t)c << (j * 8);
+    }
+    iopWrite(addr + i, word);
+  }
+}
+
+// Reads a string field of size bytes (a multiple of 4) into out
+static void iopReadString(uint32_t addr, char *out, int size) {
+  for (int i = 0; i < size; i += 4) {
+    uint32_t word = iopRead(addr + i);
+    for (int j = 0; j < 4; j++)
+      out[i + j] = (word >> (j * 8)) & 0xff;
+  }
+  out[size - 1] = '\0';
+}
+
+static uint32_t findLiveScan(void) {
+  for (uint32_t addr = LIVESCAN_IOP_RAM; addr < LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - sizeof(LiveScanShared); addr += 16) {
+    if ((iopRead(addr) == LIVESCAN_MAGIC0) && (iopRead(addr + 4) == LIVESCAN_MAGIC1) && (iopRead(addr + 8) == LIVESCAN_MAGIC2) &&
+        (iopRead(addr + 12) == LIVESCAN_MAGIC3))
+      return addr;
+  }
+  return 0;
+}
+
+// Ends the live scan with an error shown in the "Refresh list" label.
+// The next "Refresh list" falls back to scanning with the launcher
+static void failLiveScan(const char *label) {
+  liveScanActive = 0;
+  liveScanDisabled = 1;
+  setGamesLabels(label);
+  showGamesEntries();
+}
+
+// Starts a live scan and shows "Scanning..." until it's done.
+// Returns 0 if the live scan is not enabled, so the launcher scans instead
+static int startLiveScan(void) {
+  if (!settings.gamesLiveScan || liveScanDisabled || !settings.gamesUseMMCE)
+    return 0;
+
+  // Keep room for the "< Back" and "Refresh list" labels
+  if ((settings.menuItemCount + 2) > CUSTOM_ITEMS)
+    return 0;
+  if (!settings.gamesCacheLoaded) {
+    settings.gamesCount = 0;
+    setGamesLabels("Refresh list");
+  }
+
+  if (!liveScanAddr)
+    liveScanAddr = findLiveScan();
+  if (!liveScanAddr) {
+    failLiveScan("Refresh list (live scan: module not found)");
+    return 1;
+  }
+
+  iopWrite(LIVESCAN_FIELD(devices), LIVESCAN_DEV_MMCE);
+  iopWriteString(LIVESCAN_FIELD(cdFolder), settings.gamesCdFolder, LIVESCAN_FOLDER_LEN);
+  iopWriteString(LIVESCAN_FIELD(dvdFolder), settings.gamesDvdFolder, LIVESCAN_FOLDER_LEN);
+  char cachePath[] = GAMES_CACHE_PATH;
+  if (settings.mcSlot == 1)
+    cachePath[2] = '1';
+  iopWriteString(LIVESCAN_FIELD(cachePath), cachePath, LIVESCAN_PATH_LEN);
+  iopWrite(LIVESCAN_FIELD(status), LIVESCAN_STATUS_IDLE);
+  iopWrite(LIVESCAN_FIELD(request), 1);
+
+  liveScanHeartbeat = iopRead(LIVESCAN_FIELD(heartbeat));
+  liveScanFrames = 0;
+  liveScanActive = 1;
+
+  // Show "Scanning..." as the only entry, using the "Refresh list" label slot
+  int slot = settings.menuItemCount + settings.gamesCount + 1;
+  strcpy(settings.menuItemName[slot], "Scanning...");
+  setMenuEntry(0, slot);
+  menuInfo->entryCount = 3;
+  menuInfo->currentEntry = 2;
+  return 1;
+}
+
+// Called once per frame while the live scan is running
+static void pollLiveScan(void) {
+  liveScanFrames++;
+  if ((liveScanFrames == LIVESCAN_HEARTBEAT_FRAMES) && (iopRead(LIVESCAN_FIELD(heartbeat)) == liveScanHeartbeat)) {
+    failLiveScan("Refresh list (live scan: module not responding)");
+    return;
+  }
+
+  if ((iopRead(LIVESCAN_FIELD(status)) != LIVESCAN_STATUS_DONE) || iopRead(LIVESCAN_FIELD(request))) {
+    if (liveScanFrames > LIVESCAN_TIMEOUT_FRAMES)
+      failLiveScan("Refresh list (live scan: timeout)");
+    return;
+  }
+
+  int result = (int)iopRead(LIVESCAN_FIELD(result));
+  int count = iopRead(LIVESCAN_FIELD(count));
+  int maxGames = CUSTOM_ITEMS - settings.menuItemCount - 2;
+  if (count > maxGames)
+    count = maxGames;
+  if (count > LIVESCAN_MAX_GAMES)
+    count = LIVESCAN_MAX_GAMES;
+
+  if (result < 0) {
+    // The cache the launcher reads wasn't updated, so the list can't be launched from
+    char label[NAME_LEN];
+    snprintf(label, sizeof(label), "Refresh list (live scan: write error %d)", result);
+    settings.gamesCount = 0;
+    failLiveScan(label);
+    return;
+  }
+
+  for (int i = 0; i < count; i++)
+    iopReadString(LIVESCAN_FIELD(names) + i * LIVESCAN_NAME_LEN, settings.menuItemName[settings.menuItemCount + i], LIVESCAN_NAME_LEN);
+  settings.gamesCount = count;
+  settings.gamesCacheLoaded = 1;
+
+  liveScanActive = 0;
+  setGamesLabels("Refresh list");
+  showGamesEntries();
+}
+#endif
 
 // Opens the games submenu requested by GAMES_REOPEN_ARG once the menu is on screen,
 // with "Games >" as the entry "< Back" returns to
@@ -136,6 +305,10 @@ static void handleGamesMenuEntry(int pos) {
   }
 
   if (pos == settings.gamesCount + 1) {
+#ifdef GAMES_MENU
+    if (startLiveScan())
+      return;
+#endif
     launchGamesMode(":s"); // Rescan
     return;
   }
@@ -157,6 +330,8 @@ int handleMenuEntry(int selected) {
 
 #ifndef HOSD
   if (gamesMenuActive) {
+    if (liveScanActive)
+      return 0; // "Scanning..." is not selectable
     if (pos < customItemCount())
       handleGamesMenuEntry(pos);
     return 0;
@@ -177,7 +352,14 @@ int handleMenuEntry(int selected) {
       openGamesMenu();
       return 0;
     }
-    // No cache yet: the launcher scans, writes it and returns to the OSD
+    // No cache yet: scan live if possible, else the launcher scans, writes it and returns to the OSD
+#ifdef GAMES_MENU
+    gamesMenuReturnEntry = menuInfo->currentEntry;
+    gamesMenuActive = 1;
+    if (startLiveScan())
+      return 0;
+    gamesMenuActive = 0;
+#endif
     launchGamesMode(":s");
     return 0;
   }
@@ -292,6 +474,10 @@ void drawMenuItemSelected(int X, int Y, uint32_t *color, int alpha, const char *
   if (settings.gamesReopen)
     reopenGamesMenu();
 #endif
+#if !defined(HOSD) && defined(GAMES_MENU)
+  if (liveScanActive && (num == 0))
+    pollLiveScan();
+#endif
 #ifdef HOSD
   asm volatile("move %0, $s1" : "=r"(num)::); // For HDD-OSD, get menu index from s1 register
   num *= 8;                                   // Multiply by 8 to align with OSDSYS behavior
@@ -339,6 +525,10 @@ void drawMenuItemUnselected(int X, int Y, uint32_t *color, int alpha, const char
 #ifndef HOSD
   if (settings.gamesReopen)
     reopenGamesMenu();
+#endif
+#if !defined(HOSD) && defined(GAMES_MENU)
+  if (liveScanActive && (num == 0))
+    pollLiveScan();
 #endif
 #ifdef HOSD
   asm volatile("move %0, $s1" : "=r"(num)::); // For HDD-OSD, get menu index from s1 register

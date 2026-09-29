@@ -79,6 +79,11 @@ typedef struct {
   int gamesCacheLoaded; // Whether GAMES_CACHE_PATH existed on boot
   char bootPath[64];    // argv[0] of the patcher, passed to the launcher so it can return to OSDMenu
   int gamesReopen;      // Open the games submenu as soon as the menu is shown (set by GAMES_REOPEN_ARG)
+  // Experimental live scan (games_live_scan), see livescan.h
+  int gamesLiveScan;
+  int gamesUseMMCE;
+  char gamesCdFolder[32];
+  char gamesDvdFolder[32];
 #endif
 } PatcherSettings;
 

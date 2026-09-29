@@ -14,6 +14,11 @@ int initModules();
 // Resets IOP before loading OSDSYS
 void resetModules();
 
+#ifdef LIVESCAN
+// Loads the modules used by the experimental live games scan
+int loadLiveScanModules();
+#endif
+
 #ifdef HOSD
 // Inits SIF RPC and fileXio without rebooting the IOP. Assumes all modules are already loaded
 void shortInit();

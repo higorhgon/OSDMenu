@@ -141,6 +141,29 @@ add_custom_command(
 )
 list(APPEND ELF_SOURCES ${launcher_source})
 
+# Experimental live games scan (games_live_scan): iomanX, mmceman and gamescan.irx
+# are loaded by the patcher before OSDSYS starts
+set(PATCHER_LIVESCAN OFF)
+if(NOT PATCHER_HOSD AND LAUNCHER_GAMES_MENU AND LAUNCHER_MMCE)
+  set(PATCHER_LIVESCAN ON)
+  set(GAMESCAN_IRX "${PATCHER_SOURCE_DIR}/iop/gamescan/gamescan.irx")
+  file(GLOB GAMESCAN_SOURCES "${PATCHER_SOURCE_DIR}/iop/gamescan/src/*" "${PATCHER_SOURCE_DIR}/iop/gamescan/src/include/*"
+       "${PATCHER_SOURCE_DIR}/iop/gamescan/Makefile" "${CMAKE_SOURCE_DIR}/common/include/livescan.h")
+  add_custom_command(
+        OUTPUT ${GAMESCAN_IRX}
+        COMMAND ${CMAKE_COMMAND} -E chdir "${PATCHER_SOURCE_DIR}/iop/gamescan" ${CMAKE_MAKE_PROGRAM}
+        DEPENDS ${GAMESCAN_SOURCES}
+        COMMENT "Building gamescan"
+        VERBATIM
+    )
+  irx_to_source("iomanX.irx" irx_source "iomanX_irx" "._irx")
+  list(APPEND IRX_SOURCES ${irx_source})
+  irx_to_source("${launcher_binary_dir}/mmceman.irx" irx_source "mmceman_irx" "._irx")
+  list(APPEND IRX_SOURCES ${irx_source})
+  irx_to_source("${GAMESCAN_IRX}" irx_source "gamescan_irx" "._irx")
+  list(APPEND IRX_SOURCES ${irx_source})
+endif()
+
 # Add embedded CNF file
 if(NOT PATCHER_HOSD AND PATCHER_CNF_FILE)
   get_filename_component(cnf_file "${PATCHER_CNF_FILE}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
@@ -197,6 +220,11 @@ endif()
 # Show the "Games >" entry only when the embedded launcher can handle it
 if(LAUNCHER_GAMES_MENU)
   target_compile_definitions(${patcher_unc_target} PRIVATE GAMES_MENU)
+endif()
+if(PATCHER_LIVESCAN)
+  target_compile_definitions(${patcher_unc_target} PRIVATE LIVESCAN)
+  # mmceman.irx is built by the launcher target
+  add_dependencies(${patcher_unc_target} launcher)
 endif()
 if(PATCHER_ENABLE_SPLASH)
   target_compile_definitions(${patcher_unc_target} PRIVATE ENABLE_SPLASH)

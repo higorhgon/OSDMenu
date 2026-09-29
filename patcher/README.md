@@ -135,6 +135,7 @@ These options are also read by the **launcher**:
 - `games_mmce_gameid` — if enabled (default), sends the game's title ID to MMCE devices before launching, so they switch to the game's own memory card (`mmce?:/MemoryCards/PS2/<ID>/<ID>-1.mcd`), like NHDDL does
 - `games_launcher` — `neutrino` (default) or `opl`. With `opl`, games are launched via `games_opl_path` when OPL can autolaunch them, falling back to Neutrino otherwise (see [launcher/README.md](../launcher/README.md#games-handler))
 - `games_opl_path` — path to OPL, e.g. [RiptOPL](https://github.com/NathanNeurotic/Open-PS2-Loader) (required for `games_launcher = opl`)
+- `games_live_scan` — **experimental**, MMCE only. If enabled, "Refresh list" scans without leaving OSDMenu: the patcher loads `iomanX`, `mmceman` and its own `gamescan.irx` into the IOP before OSDSYS starts and controls `gamescan.irx` through shared IOP memory while OSDSYS is running, showing "Scanning..." until the list is ready. Errors are shown in the "Refresh list" label, and the next "Refresh list" falls back to the launcher. May break OSDSYS memory card or controller access
 - `games_return_path` — ELF to run after "Refresh list" or a failed game launch (e.g. `mc?:/BOOT/BOOT.ELF`). When not set, the launcher reopens OSDMenu (with the games submenu open) from the path it was started from, then tries `mc?:/BOOT/osdmenu.elf`, and only falls back to the original OSDSYS if both fail
 
 To add a custom separator to the menu, add a `name_OSDSYS_ITEM_???` entry that starts with `$!`.  

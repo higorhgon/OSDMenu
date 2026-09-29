@@ -54,6 +54,31 @@ int initModules() {
   fioInit();
   return 0;
 }
+
+#ifdef LIVESCAN
+extern unsigned char iomanX_irx[] __attribute__((aligned(16)));
+extern uint32_t size_iomanX_irx;
+extern unsigned char mmceman_irx[] __attribute__((aligned(16)));
+extern uint32_t size_mmceman_irx;
+extern unsigned char gamescan_irx[] __attribute__((aligned(16)));
+extern uint32_t size_gamescan_irx;
+
+// Loads the modules used by the experimental live games scan (games_live_scan).
+// Must be called before OSDSYS starts, while the patcher still owns SIF RPC
+int loadLiveScanModules() {
+  int ret, iopret;
+  ret = SifExecModuleBuffer(iomanX_irx, size_iomanX_irx, 0, NULL, &iopret);
+  if ((ret < 0) || (iopret == 1))
+    return -1;
+  ret = SifExecModuleBuffer(mmceman_irx, size_mmceman_irx, 0, NULL, &iopret);
+  if ((ret < 0) || (iopret == 1))
+    return -2;
+  ret = SifExecModuleBuffer(gamescan_irx, size_gamescan_irx, 0, NULL, &iopret);
+  if ((ret < 0) || (iopret == 1))
+    return -3;
+  return 0;
+}
+#endif
 #else
 // HOSDMenu
 
