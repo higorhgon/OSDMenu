@@ -232,6 +232,11 @@ int handleOSDM(int argc, char *argv[]) {
         gamesCfg.neutrinoPath = strdup(valuePtr);
       continue;
     }
+    if (!strncmp(lineBuffer, "games_return_path", 17)) {
+      if (strlen(valuePtr) > 0)
+        gamesCfg.returnPath = strdup(valuePtr);
+      continue;
+    }
     if (!strncmp(lineBuffer, "games_neutrino_arg", 18)) {
       if (strlen(valuePtr) > 0)
         gamesCfg.neutrinoArgs = addStr(gamesCfg.neutrinoArgs, valuePtr);

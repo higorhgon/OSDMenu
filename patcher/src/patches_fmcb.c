@@ -43,7 +43,7 @@ static int customItemCount(void) {
 // Launches the launcher for the OSDMENU.CNF entry with the given index.
 // suffix is appended to the osdm path and interpreted by the launcher's games handler
 static void launchMenuItem(int idx, const char *suffix) {
-  char item[48] = {0};
+  char item[128] = {0};
 #ifdef EMBED_CNF
   // osdm:a<8-char address>:<8-char CNF size>:<3-char idx>
   // Relocate the CNF file to the memory unused by the launcher code
@@ -63,6 +63,14 @@ static void launchMenuItem(int idx, const char *suffix) {
 }
 
 #ifndef HOSD
+// Launches the games entry in the given launcher mode (":s" or ":g<N>").
+// The patcher path is appended after '|' so the launcher can return to OSDMenu afterwards
+static void launchGamesMode(const char *mode) {
+  char suffix[16 + sizeof(settings.bootPath)];
+  snprintf(suffix, sizeof(suffix), "%s%s%s", mode, settings.bootPath[0] ? "|" : "", settings.bootPath);
+  launchMenuItem(settings.gamesItemIdx, suffix);
+}
+
 static uint32_t gamesMenuReturnEntry = 0;
 static int menuUsesStringPointers = 0; // Protokernel menus store string pointers instead of string indices
 
@@ -112,13 +120,13 @@ static void handleGamesMenuEntry(int pos) {
   }
 
   if (pos == settings.gamesCount + 1) {
-    launchMenuItem(settings.gamesItemIdx, ":s"); // Rescan
+    launchGamesMode(":s"); // Rescan
     return;
   }
 
-  char suffix[16];
-  sprintf(suffix, ":g%d", pos - 1);
-  launchMenuItem(settings.gamesItemIdx, suffix);
+  char mode[16];
+  sprintf(mode, ":g%d", pos - 1);
+  launchGamesMode(mode);
 }
 #endif
 
@@ -154,7 +162,7 @@ int handleMenuEntry(int selected) {
       return 0;
     }
     // No cache yet: the launcher scans, writes it and returns to the OSD
-    launchMenuItem(idx, ":s");
+    launchGamesMode(":s");
     return 0;
   }
 #endif

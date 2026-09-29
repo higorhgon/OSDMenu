@@ -25,6 +25,11 @@
 // OSDMENU.CNF item index the patcher uses for the automatic "Games >" entry
 #define GAMES_MENU_IDX 9999
 
+// Last path the launcher tries to return to OSDMenu after scanning the games
+#ifndef GAMES_DEFAULT_RETURN_PATH
+#define GAMES_DEFAULT_RETURN_PATH "mc?:/BOOT/osdmenu.elf"
+#endif
+
 #ifndef DKWDRV_PATH
 #define DKWDRV_PATH "mc0:/BOOT/DKWDRV.ELF"
 #endif

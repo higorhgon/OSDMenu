@@ -80,9 +80,17 @@ Handles the patcher's automatic "Games >" entry, which is passed as the reserved
 In OSDMenu, the games are shown as a submenu of the OSDSYS menu itself. Scanning storage devices is not possible
 from within OSDSYS, so the launcher does it and caches the result in `mc?:/SYS-CONF/OSDGAMES.CNF` (on the memory card
 `OSDMENU.CNF` was loaded from), which the patcher reads on boot. The patcher appends a mode to the `osdm` path:
-- `:s` — scans the devices, writes the cache and returns to the OSD. Used by the "Refresh list" submenu entry,
+- `:s` — scans the devices, writes the cache and returns to OSDMenu. Used by the "Refresh list" submenu entry,
   and when "Games >" is opened for the first time without a cache
 - `:g<N>` — launches game `N` from the cache without scanning
+
+The mode is followed by `|<path>`, the path OSDMenu was started from (e.g. `osdm:d0:9999:s|mc0:/BOOT/osdmenu.elf`).
+Calling `ExecOSD` would boot the original OSDSYS instead of OSDMenu, so after scanning or a failed launch
+the launcher tries, in order:
+1. `games_return_path` from `OSDMENU.CNF`
+2. the path passed by the patcher
+3. `mc?:/BOOT/osdmenu.elf`
+4. the original OSDSYS
 
 Without a mode (HOSDMenu), the launcher scans and shows its own full-screen list instead.
 

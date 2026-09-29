@@ -77,6 +77,7 @@ typedef struct {
   int gamesItemIdx;     // CNF index of the entry with path "games", -1 if none
   int gamesCount;       // Number of games loaded from GAMES_CACHE_PATH
   int gamesCacheLoaded; // Whether GAMES_CACHE_PATH existed on boot
+  char bootPath[64];    // argv[0] of the patcher, passed to the launcher so it can return to OSDMenu
 #endif
 } PatcherSettings;
 

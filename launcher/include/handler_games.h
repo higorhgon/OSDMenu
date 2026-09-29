@@ -6,7 +6,7 @@
 #define GAMES_FOLDER_NAME_LEN 32
 
 // Settings parsed from OSDMENU.CNF by handler_osdm.c, consumed by handleGames().
-// neutrinoPath and neutrinoArgs are heap-allocated and owned by the caller.
+// neutrinoPath, neutrinoArgs and returnPath are heap-allocated and owned by the caller.
 typedef struct {
   int useUSB;
   int useMX4SIO;
@@ -15,16 +15,18 @@ typedef struct {
   char dvdFolder[GAMES_FOLDER_NAME_LEN]; // PS2 titles released on DVD media
   char *neutrinoPath;                    // Path to the user-installed neutrino.elf
   linkedStr *neutrinoArgs;               // Extra static arguments appended to every launch
+  char *returnPath;                      // ELF to run after scanning instead of OSDMenu itself
 } GamesConfig;
 
 // handler_games.c
 //
 // osdmArg is the osdm path that led here. The patcher appends a mode suffix:
 //   ":s"  - scan the configured CD/DVD folders on the enabled devices
-//           (USB/MX4SIO/MMCE), write GAMES_CACHE_PATH and return to the OSD
+//           (USB/MX4SIO/MMCE), write GAMES_CACHE_PATH and return to OSDMenu
 //   ":gN" - launch game N from GAMES_CACHE_PATH via neutrino.elf, no scan
+// followed by an optional "|<patcher path>" used to return to OSDMenu afterwards.
 // Without a suffix (e.g. HOSDMenu), scans and shows a full-screen list instead.
-// Only returns on error; otherwise control passes to launchPath()/ExecOSD().
+// Only returns on error; otherwise control passes to launchPath() or ExecOSD().
 int handleGames(GamesConfig *cfg, const char *osdmArg);
 
 #endif

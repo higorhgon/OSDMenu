@@ -34,6 +34,10 @@ int main(int argc, char *argv[]) {
   // Set OSDMenu & OSDSYS default settings for configurable items
   initConfig();
 
+  // Keep a copy of the patcher path for returning from the games menu
+  if ((argc > 0) && argv[0])
+    strncpy(settings.bootPath, argv[0], sizeof(settings.bootPath) - 1);
+
   // Guess MC slot from argv[0]
   if (!strncmp(argv[0], "mc0", 3))
     settings.mcSlot = 0;

@@ -530,26 +530,68 @@ static void freeGamesConfig(GamesConfig *cfg) {
     free(cfg->neutrinoPath);
   if (cfg->neutrinoArgs)
     freeLinkedStr(cfg->neutrinoArgs);
+  if (cfg->returnPath)
+    free(cfg->returnPath);
+}
+
+// Frees cfg and returns to OSDMenu. ExecOSD() alone would boot the ROM OSDSYS,
+// which doesn't bring OSDMenu back when it was started by a bootloader or an
+// autoboot that only runs on power-on. Tries games_return_path, then the path
+// the patcher was started from, then GAMES_DEFAULT_RETURN_PATH.
+static void returnToMenu(GamesConfig *cfg, const char *patcherPath) {
+  char candidates[3][GAMES_REL_PATH_LEN] = {0};
+  if (cfg->returnPath)
+    strncpy(candidates[0], cfg->returnPath, GAMES_REL_PATH_LEN - 1);
+  if (patcherPath)
+    strncpy(candidates[1], patcherPath, GAMES_REL_PATH_LEN - 1);
+  strncpy(candidates[2], GAMES_DEFAULT_RETURN_PATH, GAMES_REL_PATH_LEN - 1);
+  freeGamesConfig(cfg);
+
+  for (int i = 0; i < 3; i++) {
+    if (candidates[i][0] == '\0')
+      continue;
+
+    // ROM and disc paths would not bring OSDMenu back
+    DeviceType type = guessDeviceType(candidates[i]);
+    if ((type == Device_None) || (type == Device_ROM) || (type == Device_CDROM))
+      continue;
+
+    // Only returns if the file can't be launched
+    char *argv[] = {candidates[i]};
+    launchPath(1, argv);
+  }
+
+  ExecOSD(0, NULL);
 }
 
 int handleGames(GamesConfig *cfg, const char *osdmArg) {
+  // Split off the patcher path first, since it contains ':' too
+  char arg[GAMES_REL_PATH_LEN] = {0};
+  strncpy(arg, osdmArg, sizeof(arg) - 1);
+  char *patcherPath = strchr(arg, '|');
+  if (patcherPath)
+    *patcherPath++ = '\0';
+
   // Mode suffix appended by the patcher's games submenu, see handler_games.h
-  const char *mode = strrchr(osdmArg, ':');
+  const char *mode = strrchr(arg, ':');
   char modeType = (mode && ((mode[1] == 'g') || (mode[1] == 's'))) ? mode[1] : '\0';
 
   if ((modeType != 's') && !cfg->neutrinoPath) {
     msg("Games: games_neutrino_path is not set in OSDMENU.CNF\n");
     sleep(3);
-    freeGamesConfig(cfg);
-    ExecOSD(0, NULL);
+    if (modeType)
+      returnToMenu(cfg, patcherPath);
+    else {
+      freeGamesConfig(cfg);
+      ExecOSD(0, NULL);
+    }
     return -EINVAL;
   }
 
   if (modeType == 'g') {
     int res = launchCachedGame(cfg, atoi(mode + 2));
     sleep(5);
-    freeGamesConfig(cfg);
-    ExecOSD(0, NULL);
+    returnToMenu(cfg, patcherPath);
     return res;
   }
 
@@ -576,8 +618,12 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
   if (res) {
     msg("Games: Failed to initialize devices: %d\n", res);
     sleep(3);
-    freeGamesConfig(cfg);
-    ExecOSD(0, NULL);
+    if (modeType)
+      returnToMenu(cfg, patcherPath);
+    else {
+      freeGamesConfig(cfg);
+      ExecOSD(0, NULL);
+    }
     return res;
   }
 
@@ -598,8 +644,7 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
     } else
       sleep((res < 0) ? 5 : 1);
 
-    freeGamesConfig(cfg);
-    ExecOSD(0, NULL);
+    returnToMenu(cfg, patcherPath);
     return res;
   }
 
