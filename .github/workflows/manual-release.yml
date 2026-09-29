@@ -1,0 +1,147 @@
+name: Manual release
+
+# Builds the selected branch and publishes it as a GitHub release.
+# Only runs when started by hand (Actions -> Manual release -> Run workflow), so a
+# build is only distributed when it has been chosen to be. The regular Build workflow
+# keeps building every push without publishing anything.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create (e.g. games-2026.09.29). Must not exist yet"
+        required: true
+        type: string
+      title:
+        description: "Release title (defaults to the tag)"
+        required: false
+        type: string
+      notes:
+        description: "Release notes (the commit list since the previous release is added below)"
+        required: false
+        type: string
+      prerelease:
+        description: "Mark as pre-release"
+        required: false
+        default: true
+        type: boolean
+      draft:
+        description: "Create as draft (publish it by hand from the Releases page)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: manual-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: ghcr.io/ps2homebrew/ps2homebrew:main
+    steps:
+      - name: Install cmake
+        run: |
+          apk add cmake
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Fetch full clone
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch --prune --unshallow
+
+      - name: Compile project
+        env:
+          KELFSERVER_API_ADDRESS: ${{ secrets.KELFSERVER_API_ADDRESS }}
+          KELFSERVER_API_KEY: ${{ secrets.KELFSERVER_API_KEY }}
+        run: |
+          if [ -n "$KELFSERVER_API_ADDRESS" ] && [ -n "$KELFSERVER_API_KEY" ]; then
+            echo "KELF signing credentials found, building the full release package"
+            cmake -B build -DRELEASE=ON
+          else
+            echo "No KELF signing credentials configured, building unsigned ELFs only"
+            cmake -B build
+          fi
+          cmake --build build
+
+      - name: Collect release files
+        run: |
+          mkdir -p package
+          if [ -d build/release ]; then
+            cp -r build/release/. package/
+          else
+            # Unsigned build: the ELFs plus the docs and the example config
+            mkdir -p package/launcher package/mbr
+            cp build/osdmenu/osdmenu.elf build/hosdmenu/hosdmenu.elf package/
+            cp build/launcher/launcher.elf launcher/README.md package/launcher/
+            cp build/mbr/osdmbr.elf build/mbr/osdmbr.bin mbr/README.md package/mbr/ 2>/dev/null || true
+            cp README.md package/
+            cp patcher/README.md package/README-patcher.md
+            cp examples/OSDMENU.CNF package/
+          fi
+          git log -1 --format='commit: %H%nbranch: ${{ github.ref_name }}%ndate:   %cI' > package/BUILD-INFO.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package
+          path: package/**
+          if-no-files-found: error
+
+  release:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: package
+          path: package
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+          TITLE: ${{ inputs.title }}
+          NOTES: ${{ inputs.notes }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          DRAFT: ${{ inputs.draft }}
+        run: |
+          set -e
+          if gh release view "$TAG" >/dev/null 2>&1 || git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Tag or release '$TAG' already exists, pick another tag"
+            exit 1
+          fi
+
+          (cd package && zip -r "../osdmenu-$TAG.zip" .)
+
+          # Notes: the given text, then the commits since the previous tag
+          PREV=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          {
+            [ -n "$NOTES" ] && printf '%s\n\n' "$NOTES"
+            echo "Built from \`${{ github.ref_name }}\` at ${{ github.sha }}."
+            echo
+            if [ -n "$PREV" ]; then
+              echo "### Changes since $PREV"
+              git log --no-merges --format='- %s' "$PREV..HEAD"
+            else
+              echo "### Recent changes"
+              git log --no-merges --format='- %s' -20
+            fi
+          } > notes.md
+
+          FLAGS=""
+          [ "$PRERELEASE" = "true" ] && FLAGS="$FLAGS --prerelease"
+          [ "$DRAFT" = "true" ] && FLAGS="$FLAGS --draft"
+          gh release create "$TAG" "osdmenu-$TAG.zip" \
+            --target "${{ github.sha }}" \
+            --title "${TITLE:-$TAG}" \
+            --notes-file notes.md $FLAGS
