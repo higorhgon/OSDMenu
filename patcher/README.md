@@ -176,6 +176,7 @@ group_OSDSYS_ITEM_10 = Apps
 Each group is shown as a `<group> >` entry that opens a submenu with "< Back" and its entries in `OSDMENU.CNF` order.
 The groups are listed in alphabetical order after "Games >" and "PSX >", followed by the entries without a group.
 Circle/Triangle go back and Left/Right move a page, like in the games submenus. Up to 32 groups are supported.
+Group names can contain spaces, and are case-sensitive (`Apps` and `apps` are different groups).
 
 By default, OSDMenu uses custom menu coordinates to make the menu appear in the center of the screen.  
 To get the original OSDSYS look, set the following values in `OSDMENU.CNF`:

@@ -340,6 +340,9 @@ int loadConfig(void) {
 #ifndef HOSD
     if (!strncmp(name, "group_OSDSYS_ITEM_", 18)) {
       if (groupLineCount < CUSTOM_ITEMS) {
+        // Drop trailing whitespace, so "Apps " and "Apps" are the same group
+        for (i = strlen(value); (i > 0) && ((unsigned char)value[i - 1] <= ' '); i--)
+          value[i - 1] = '\0';
         groupLineIdx[groupLineCount] = atoi(&name[18]);
         groupLineName[groupLineCount++] = value;
       }
