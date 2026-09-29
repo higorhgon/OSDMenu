@@ -258,6 +258,10 @@ int loadConfig(void) {
       settings.gamesLiveScan = atoi(value);
       continue;
     }
+    if (!strcmp(name, "games_button_debug")) {
+      settings.buttonDebug = atoi(value);
+      continue;
+    }
     if (!strcmp(name, "games_cd_folder")) {
       if (value[0])
         strncpy(settings.gamesCdFolder, value, sizeof(settings.gamesCdFolder) - 1);
@@ -545,6 +549,7 @@ void initConfig(void) {
     settings.submenus[i].sortRecent = 0;
   }
   settings.reopenSubmenu = 0;
+  settings.buttonDebug = 0;
   settings.gamesLiveScan = 0;
   settings.liveScanBoot = LIVESCAN_BOOT_NOT_LOADED;
   settings.gamesUseMMCE = 0;

@@ -797,6 +797,42 @@ void getButtonsPanelType(int type) {
   DrawButtonPanelGetOSDLang();
 }
 
+#ifndef HOSD
+// Button prompts of the games submenus: "Back" replaces "Version", and "Sort" is added in between.
+// The icon types of Circle and Square are not known, so they are derived from the types OSDSYS
+// uses for Enter (Cross, or Circle on Japanese consoles) and Version (Triangle), assuming the
+// icons are consecutive in either the Circle, Cross, Square, Triangle or the Triangle, Circle,
+// Cross, Square order. In both, Circle is right before Cross and Square right after it.
+// If the difference between Enter and Version fits neither, only the texts are shown.
+static int enterIconType = -1;
+static int versionIconType = -1;
+static int backIconType = -1;
+static int sortIconType = -1;
+
+static void deriveSubmenuIcons(void) {
+  backIconType = sortIconType = -1;
+  if ((enterIconType < 0) || (versionIconType < 0))
+    return;
+
+  int diff = versionIconType - enterIconType;
+  if ((diff == 2) || (diff == -2)) { // Enter is Cross: back with Circle
+    backIconType = enterIconType - 1;
+    sortIconType = enterIconType + 1;
+  } else if ((diff == 3) || (diff == -1)) { // Enter is Circle: back with Cross
+    backIconType = enterIconType + 1;
+    sortIconType = enterIconType + 2;
+  }
+  if ((backIconType < 0) || (sortIconType < 0))
+    backIconType = sortIconType = -1;
+}
+
+// Returns 1 when the main menu button panel shows a games submenu
+static int showSubmenuPrompts(void) { return (ButtonsPanel_Type == MAINMENU_PANEL) && activeMenu && !liveScanActive; }
+
+// X coordinate of the "Sort" prompt, between Enter and Back
+static int sortPromptX(void) { return (settings.enterX + settings.versionX) / 2; }
+#endif
+
 // drawNonselectableEntryLeft() is called for all items less the last
 void drawNonselectableEntryLeft(int X, int Y, uint32_t *color, int alpha, const char *string) {
   if (ButtonsPanel_Type == MAINMENU_PANEL) {
@@ -826,6 +862,16 @@ void drawNonselectableEntryRight(int X, int Y, uint32_t *color, int alpha, const
       settings.versionY = Y;
 
 #ifndef HOSD
+    if (showSubmenuPrompts()) {
+      char sortLabel[40];
+      if (settings.buttonDebug)
+        snprintf(sortLabel, sizeof(sortLabel), "Sort: %s (%d/%d)", activeMenu->sortRecent ? "[Recent]" : "[A-Z]", enterIconType, versionIconType);
+      else
+        snprintf(sortLabel, sizeof(sortLabel), "Sort: %s", activeMenu->sortRecent ? "[Recent]" : "[A-Z]");
+      DrawNonSelectableItem(sortPromptX() + 28, settings.versionY, color, alpha, sortLabel);
+      DrawNonSelectableItem(settings.versionX + 28, settings.versionY, color, alpha, "Back");
+      return;
+    }
     DrawNonSelectableItem(settings.versionX + 28, settings.versionY, color, alpha, string);
 #else
     // Adding 1 to Y offset to align text with the icon
@@ -844,6 +890,12 @@ void drawIconLeft(int type, int X, int Y, int alpha) {
     if (settings.enterY == -1)
       settings.enterY = Y;
 
+#ifndef HOSD
+    if (enterIconType != type) {
+      enterIconType = type;
+      deriveSubmenuIcons();
+    }
+#endif
     DrawIcon(type, settings.enterX, settings.enterY, alpha);
   } else
     DrawIcon(type, X, Y, alpha);
@@ -858,6 +910,20 @@ void drawIconRight(int type, int X, int Y, int alpha) {
     if (settings.versionY == -1)
       settings.versionY = Y;
 
+#ifndef HOSD
+    // OSDSYS always passes the Version (Triangle) icon here, even while a submenu is shown
+    if (versionIconType != type) {
+      versionIconType = type;
+      deriveSubmenuIcons();
+    }
+    if (showSubmenuPrompts()) {
+      if (sortIconType >= 0)
+        DrawIcon(sortIconType, sortPromptX(), settings.versionY, alpha);
+      if (backIconType >= 0)
+        DrawIcon(backIconType, settings.versionX, settings.versionY, alpha);
+      return;
+    }
+#endif
     DrawIcon(type, settings.versionX, settings.versionY, alpha);
   } else
     DrawIcon(type, X, Y, alpha);

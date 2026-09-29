@@ -97,6 +97,7 @@ typedef struct {
   GamesSubmenu submenus[SUBMENU_COUNT];
   char bootPath[64]; // argv[0] of the patcher, passed to the launcher so it can return to OSDMenu
   int reopenSubmenu; // SUBMENU_* + 1 to open as soon as the menu is shown (GAMES_REOPEN_ARG/PSX_REOPEN_ARG), 0 for none
+  int buttonDebug;   // Show the OSDSYS button icon types in the submenu prompts (games_button_debug)
   // Experimental live scan (games_live_scan), see livescan.h
   int gamesLiveScan;
   int liveScanBoot; // loadLiveScanModules() result, or LIVESCAN_BOOT_* (for diagnostics)
