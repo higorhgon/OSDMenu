@@ -59,15 +59,15 @@ typedef enum { GameMedia_DVD, GameMedia_CD } GameMediaType;
 
 typedef struct {
   char name[GAMES_NAME_LEN];        // Display name
-  char relPath[GAMES_REL_PATH_LEN]; // Path relative to the device root, e.g. "/DVD/Some Game/game.iso"
-  const char *neutrinoDriver;       // Neutrino -dvd= prefix ("usb"/"mx4sio"/"mmce"), static lifetime
+  char path[GAMES_REL_PATH_LEN];    // Full path as scanned, e.g. "mmce0:/DVD/Some Game/game.iso"
+  const char *neutrinoDriver;       // Neutrino -bsd= driver ("usb"/"mx4sio"/"mmce"), static lifetime
   GameMediaType media;
 } GameEntry;
 
 typedef struct {
   DeviceType device;
   const char *mountFmt;       // printf format for the mountpoint, e.g. "mass%d:"
-  const char *neutrinoDriver; // Neutrino -dvd= prefix for this device class
+  const char *neutrinoDriver; // Neutrino -bsd= driver for this device class
   int mountCount;             // Number of indices to probe (0..mountCount-1)
 } GamesDeviceEntry;
 
@@ -120,7 +120,7 @@ static void makeDisplayName(const char *src, char *out, size_t outSize) {
 }
 
 // Adds a game to the in-memory list if there's room left
-static void addGameEntry(const char *relDir, const char *isoName, const char *displayName, GameMediaType media,
+static void addGameEntry(const char *dirPath, const char *isoName, const char *displayName, GameMediaType media,
                           const char *neutrinoDriver) {
   if (gameCount >= GAMES_MAX_ENTRIES) {
     gameListTruncated = 1;
@@ -130,7 +130,7 @@ static void addGameEntry(const char *relDir, const char *isoName, const char *di
   GameEntry *g = &gameList[gameCount];
   makeDisplayName(displayName, g->name, GAMES_NAME_LEN);
 
-  snprintf(g->relPath, GAMES_REL_PATH_LEN, "%s/%s", relDir, isoName);
+  snprintf(g->path, GAMES_REL_PATH_LEN, "%s/%s", dirPath, isoName);
   g->neutrinoDriver = neutrinoDriver;
   g->media = media;
   gameCount++;
@@ -182,9 +182,6 @@ static int scanFolder(const char *mountpoint, const char *folder, GameMediaType 
   if (dfd < 0)
     return 0; // Folder doesn't exist on this device — not an error
 
-  char relDir[GAMES_REL_PATH_LEN];
-  snprintf(relDir, sizeof(relDir), "/%s", folder);
-
   iox_dirent_t dirent;
   while (fileXioDread(dfd, &dirent) > 0) {
     if (!strcmp(dirent.name, ".") || !strcmp(dirent.name, ".."))
@@ -196,11 +193,9 @@ static int scanFolder(const char *mountpoint, const char *folder, GameMediaType 
       snprintf(subDirPath, sizeof(subDirPath), "%s/%s", dirPath, dirent.name);
 
       char isoName[GAMES_NAME_LEN];
-      if (hasExactlyOneISO(subDirPath, isoName, sizeof(isoName))) {
-        char subRelDir[GAMES_REL_PATH_LEN];
-        snprintf(subRelDir, sizeof(subRelDir), "%s/%s", relDir, dirent.name);
-        addGameEntry(subRelDir, isoName, dirent.name, media, neutrinoDriver);
-      } else {
+      if (hasExactlyOneISO(subDirPath, isoName, sizeof(isoName)))
+        addGameEntry(subDirPath, isoName, dirent.name, media, neutrinoDriver);
+      else {
         DPRINTF("Games: skipping ambiguous subfolder %s\n", subDirPath);
       }
       continue;
@@ -208,7 +203,7 @@ static int scanFolder(const char *mountpoint, const char *folder, GameMediaType 
 
     char *ext = strrchr(dirent.name, '.');
     if (ext && !strcasecmp(ext, ".iso"))
-      addGameEntry(relDir, dirent.name, dirent.name, media, neutrinoDriver);
+      addGameEntry(dirPath, dirent.name, dirent.name, media, neutrinoDriver);
   }
   fileXioDclose(dfd);
   return 1;
@@ -329,20 +324,27 @@ static void drawGameList(int selected) {
   scr_printf(" Cima/Baixo: navegar   X: jogar   Triangulo/Circulo: voltar");
 }
 
-// Builds the neutrino.elf argv for dvdTarget ("<driver>:<path>") and hands off
-// to the existing generic launch pipeline. Only returns on failure.
-static void launchNeutrino(GamesConfig *cfg, const char *dvdTarget) {
-  char dvdArg[GAMES_REL_PATH_LEN + 32];
-  snprintf(dvdArg, sizeof(dvdArg), "-dvd=%s", dvdTarget);
+// Builds the neutrino.elf argv and hands off to the existing generic launch
+// pipeline. Only returns on failure.
+// Mirrors NHDDL (pcm720/nhddl, src/launcher.c), which always passes -bsd
+// explicitly with the full mounted ISO path in -dvd ("mmce0:/DVD/game.iso"),
+// so it also works on Neutrino versions that don't auto-detect -bsd from a
+// "<driver>:" prefix — without -bsd those fall back to the physical disc drive.
+static void launchNeutrino(GamesConfig *cfg, const char *bsd, const char *isoPath) {
+  char bsdArg[16];
+  snprintf(bsdArg, sizeof(bsdArg), "-bsd=%s", bsd);
+  char dvdArg[GAMES_REL_PATH_LEN + 8];
+  snprintf(dvdArg, sizeof(dvdArg), "-dvd=%s", isoPath);
 
-  char *argv[3 + GAMES_MAX_EXTRA_ARGS];
+  char *argv[4 + GAMES_MAX_EXTRA_ARGS];
   int argc = 0;
   argv[argc++] = cfg->neutrinoPath;
+  argv[argc++] = bsdArg;
   argv[argc++] = dvdArg;
   argv[argc++] = "-qb";
 
   linkedStr *extra = cfg->neutrinoArgs;
-  while (extra && argc < 3 + GAMES_MAX_EXTRA_ARGS) {
+  while (extra && argc < 4 + GAMES_MAX_EXTRA_ARGS) {
     argv[argc++] = extra->str;
     extra = extra->next;
   }
@@ -355,13 +357,10 @@ static void launchNeutrino(GamesConfig *cfg, const char *dvdTarget) {
 static void launchSelected(GamesConfig *cfg, int index) {
   GameEntry *g = &gameList[index];
 
-  char dvdTarget[GAMES_REL_PATH_LEN + 16];
-  snprintf(dvdTarget, sizeof(dvdTarget), "%s:%s", g->neutrinoDriver, g->relPath);
-
   scr_setXY(0, GAMES_LIST_START_ROW + GAMES_VISIBLE_ROWS + 2);
   scr_printf(" Iniciando %s...\n", g->name);
 
-  launchNeutrino(cfg, dvdTarget);
+  launchNeutrino(cfg, g->neutrinoDriver, g->path);
 
   scr_printf(" Falha ao iniciar %s\n", g->name);
   sleep(2);
@@ -375,7 +374,7 @@ static void getGamesCachePath(char *path) {
 
 // Writes the scan result to GAMES_CACHE_PATH, which the patcher reads on boot
 // to show the games as an OSDSYS submenu. Each game is a "game" (display name)
-// line followed by a "path" (Neutrino -dvd= target) line.
+// line followed by its Neutrino "bsd" driver and "dvd" ISO path lines.
 static int writeGamesCache(void) {
   char path[sizeof(GAMES_CACHE_PATH)];
   getGamesCachePath(path);
@@ -387,7 +386,7 @@ static int writeGamesCache(void) {
   char line[GAMES_NAME_LEN + GAMES_REL_PATH_LEN + 32];
   int res = 0;
   for (int i = 0; (i < gameCount) && !res; i++) {
-    int len = snprintf(line, sizeof(line), "game = %s\npath = %s:%s\n", gameList[i].name, gameList[i].neutrinoDriver, gameList[i].relPath);
+    int len = snprintf(line, sizeof(line), "game = %s\nbsd = %s\ndvd = %s\n", gameList[i].name, gameList[i].neutrinoDriver, gameList[i].path);
     if (len >= (int)sizeof(line))
       len = sizeof(line) - 1;
     if (write(fd, line, len) != len)
@@ -408,30 +407,38 @@ static int launchCachedGame(GamesConfig *cfg, int idx) {
     return -ENOENT;
   }
 
+  // Collect the "bsd" and "dvd" lines that follow the idx-th "game" line
   char line[GAMES_REL_PATH_LEN + 32];
-  char *dvdTarget = NULL;
-  int current = 0;
+  char bsd[16] = {0};
+  char isoPath[GAMES_REL_PATH_LEN] = {0};
+  int current = -1;
   while (fgets(line, sizeof(line), file)) {
-    if (strncmp(line, "path", 4) || (current++ != idx))
+    char *value = strchr(line, '=');
+    if (!value)
       continue;
-
-    dvdTarget = strchr(line, '=');
-    if (!dvdTarget)
-      break;
     do {
-      dvdTarget++;
-    } while (isspace((int)*dvdTarget));
-    dvdTarget[strcspn(dvdTarget, "\r\n")] = '\0';
-    break;
+      value++;
+    } while (isspace((int)*value));
+    value[strcspn(value, "\r\n")] = '\0';
+
+    if (!strncmp(line, "game", 4)) {
+      if (++current > idx)
+        break;
+    } else if (current == idx) {
+      if (!strncmp(line, "bsd", 3))
+        strncpy(bsd, value, sizeof(bsd) - 1);
+      else if (!strncmp(line, "dvd", 3))
+        strncpy(isoPath, value, sizeof(isoPath) - 1);
+    }
   }
   fclose(file);
 
-  if (!dvdTarget || (dvdTarget[0] == '\0')) {
+  if ((bsd[0] == '\0') || (isoPath[0] == '\0')) {
     msg("Games: game %d not found in %s, try refreshing the list\n", idx, path);
     return -ENOENT;
   }
 
-  launchNeutrino(cfg, dvdTarget);
+  launchNeutrino(cfg, bsd, isoPath);
   msg("Games: failed to launch %s\n", cfg->neutrinoPath);
   return -ENOENT;
 }
@@ -578,7 +585,7 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
 
   if (modeType == 's') {
     // Write the cache even when empty, so the submenu opens with just
-    // "< Voltar"/"Atualizar lista" instead of rescanning on every open
+    // "< Back"/"Refresh list" instead of rescanning on every open
     res = writeGamesCache();
     if (res < 0)
       msg("Games: failed to write the games list: %d\n", res);

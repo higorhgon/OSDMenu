@@ -22,6 +22,9 @@
 #define GAMES_CACHE_PATH "mc0:/SYS-CONF/OSDGAMES.CNF"
 #endif
 
+// OSDMENU.CNF item index the patcher uses for the automatic "Games >" entry
+#define GAMES_MENU_IDX 9999
+
 #ifndef DKWDRV_PATH
 #define DKWDRV_PATH "mc0:/BOOT/DKWDRV.ELF"
 #endif

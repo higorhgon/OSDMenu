@@ -20,6 +20,10 @@ char cnfPath[] = "pfs0:" HOSD_CONF_PATH;
 uint8_t *embedded_cnf_addr = embedded_cnf;
 #endif
 
+#ifdef GAMES_MENU
+static int gamesEnabled = 0; // Set when any games_device_* key is enabled
+#endif
+
 // getCNFString is the main CNF parser called for each CNF variable in a CNF file.
 // Input and output data is handled via its pointer parameters.
 // The return value flags 'false' when no variable is found. (normal at EOF)
@@ -220,13 +224,14 @@ int loadConfig(void) {
       settings.menuItemCount++;
       continue;
     }
-#ifndef HOSD
-    if (!strncmp(name, "path", 4) && !strcmp(value, "games")) {
-      char *idx = strrchr(name, '_');
-      if (idx)
-        settings.gamesItemIdx = atoi(idx + 1);
+#ifdef GAMES_MENU
+    if (!strncmp(name, "games_device_", 13)) {
+      if (atoi(value))
+        gamesEnabled = 1;
       continue;
     }
+#endif
+#ifndef HOSD
     if (!strcmp(name, "path_DKWDRV_ELF")) {
       if (strlen(value) < 4 || strncmp(value, "mc", 2))
         continue; // Accept only memory card paths
@@ -343,6 +348,20 @@ int loadConfig(void) {
 
   // Clean up
   memset(cnfPos, 0, cnfSize);
+
+#ifdef GAMES_MENU
+  // Add "Games >" as the first custom entry when any games_device_* is enabled
+  if (gamesEnabled && (settings.menuItemCount < CUSTOM_ITEMS)) {
+    memmove(settings.menuItemName[1], settings.menuItemName[0], settings.menuItemCount * NAME_LEN);
+    memmove(&settings.menuItemIdx[1], &settings.menuItemIdx[0], settings.menuItemCount * sizeof(settings.menuItemIdx[0]));
+    strcpy(settings.menuItemName[0], "Games >");
+    settings.menuItemIdx[0] = GAMES_MENU_IDX;
+    settings.menuItemCount++;
+#ifndef HOSD
+    settings.gamesItemIdx = GAMES_MENU_IDX;
+#endif
+  }
+#endif
   return 0;
 }
 
@@ -388,8 +407,8 @@ void loadGamesCache(void) {
   }
   memset(cnfStart, 0, cnfSize);
 
-  strcpy(settings.menuItemName[settings.menuItemCount + settings.gamesCount], "< Voltar");
-  strcpy(settings.menuItemName[settings.menuItemCount + settings.gamesCount + 1], "Atualizar lista");
+  strcpy(settings.menuItemName[settings.menuItemCount + settings.gamesCount], "< Back");
+  strcpy(settings.menuItemName[settings.menuItemCount + settings.gamesCount + 1], "Refresh list");
   settings.gamesCacheLoaded = 1;
 }
 #endif

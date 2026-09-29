@@ -77,20 +77,20 @@ static void setMenuEntry(int pos, int slot) {
   }
 }
 
-// Replaces the custom entries with "< Voltar", the cached games and "Atualizar lista".
+// Replaces the custom entries with "< Back", the cached games and "Refresh list".
 // OSDSYS reads the entry table and cursor from menuInfo every frame, so this takes
 // effect immediately without leaving the OSD
 static void openGamesMenu(void) {
   int base = settings.menuItemCount;
   int pos = 0;
-  setMenuEntry(pos++, base + settings.gamesCount); // "< Voltar"
+  setMenuEntry(pos++, base + settings.gamesCount); // "< Back"
   for (int i = 0; i < settings.gamesCount; i++)
     setMenuEntry(pos++, base + i);
-  setMenuEntry(pos++, base + settings.gamesCount + 1); // "Atualizar lista"
+  setMenuEntry(pos++, base + settings.gamesCount + 1); // "Refresh list"
 
   gamesMenuReturnEntry = menuInfo->currentEntry;
   menuInfo->entryCount = 2 + pos;
-  menuInfo->currentEntry = 3; // First game, or "Atualizar lista" when there are none
+  menuInfo->currentEntry = 3; // First game, or "Refresh list" when there are none
   gamesMenuActive = 1;
 }
 

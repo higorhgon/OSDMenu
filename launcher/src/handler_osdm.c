@@ -111,10 +111,8 @@ int handleOSDM(int argc, char *argv[]) {
 
 #ifdef LAUNCHER_GAMES_MENU
   // Games menu configuration, populated below alongside the other global keys
+  // Devices are opt-in: enabling any of them is also what makes the patcher show "Games >"
   GamesConfig gamesCfg = {0};
-  gamesCfg.useUSB = 1;
-  gamesCfg.useMX4SIO = 1;
-  gamesCfg.useMMCE = 1;
   strcpy(gamesCfg.cdFolder, "CD");
   strcpy(gamesCfg.dvdFolder, "DVD");
 #endif
@@ -246,6 +244,18 @@ int handleOSDM(int argc, char *argv[]) {
   if (target == 9)
     deinitPFS();
 
+#ifdef LAUNCHER_GAMES_MENU
+  // The patcher's automatic "Games >" entry has no paths in OSDMENU.CNF
+  if (targetIdx == GAMES_MENU_IDX) {
+    freeLinkedStr(targetPaths);
+    freeLinkedStr(targetArgs);
+    if (settings.dkwdrvPath)
+      free(settings.dkwdrvPath);
+
+    return handleGames(&gamesCfg, argv[0]);
+  }
+#endif
+
   if (!targetPaths) {
     msg("OSDM: No paths found for entry %d\n", targetIdx);
     freeLinkedStr(targetPaths);
@@ -274,17 +284,6 @@ int handleOSDM(int argc, char *argv[]) {
     shutdownPS2();
   }
 
-#ifdef LAUNCHER_GAMES_MENU
-  // Handle 'games' entry
-  if (!strcmp(targetPaths->str, "games")) {
-    freeLinkedStr(targetPaths);
-    freeLinkedStr(targetArgs);
-    if (settings.dkwdrvPath)
-      free(settings.dkwdrvPath);
-
-    return handleGames(&gamesCfg, argv[0]);
-  }
-#endif
 
   // Build argv, freeing targetArgs
   char **targetArgv = malloc(targetArgc * sizeof(char *));
