@@ -141,7 +141,8 @@ In both submenus:
 
 The button prompts at the bottom show "Back" instead of "Version" and the current sort order while a submenu is open.
 The Circle and Square icons are derived from the icons OSDSYS uses for Enter and Version; if they can't be derived,
-only the texts are shown. `games_button_debug = 1` adds the icon types OSDSYS uses to the "Sort" prompt.
+only the texts are shown. `games_button_debug = 1` adds the icon types to the "Sort" prompt: `e` (Enter), `v` (Version) and `s`
+(icons seen in other screens such as System Configuration, which shows Circle and Square).
 
 These options are also read by the **launcher**:
 - `games_device_usb`, `games_device_mx4sio`, `games_device_mmce` — enable scanning each device type (default: all disabled)

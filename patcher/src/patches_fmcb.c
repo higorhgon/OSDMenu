@@ -808,6 +808,17 @@ static int enterIconType = -1;
 static int versionIconType = -1;
 static int backIconType = -1;
 static int sortIconType = -1;
+// Icon types seen in other panels (System Configuration shows Circle and Square), for games_button_debug
+static int seenIconTypes[8];
+static int seenIconCount = 0;
+
+static void recordIconType(int type) {
+  for (int i = 0; i < seenIconCount; i++)
+    if (seenIconTypes[i] == type)
+      return;
+  if (seenIconCount < (int)(sizeof(seenIconTypes) / sizeof(seenIconTypes[0])))
+    seenIconTypes[seenIconCount++] = type;
+}
 
 static void deriveSubmenuIcons(void) {
   backIconType = sortIconType = -1;
@@ -863,10 +874,15 @@ void drawNonselectableEntryRight(int X, int Y, uint32_t *color, int alpha, const
 
 #ifndef HOSD
     if (showSubmenuPrompts()) {
-      char sortLabel[40];
-      if (settings.buttonDebug)
-        snprintf(sortLabel, sizeof(sortLabel), "Sort: %s (%d/%d)", activeMenu->sortRecent ? "[Recent]" : "[A-Z]", enterIconType, versionIconType);
-      else
+      char sortLabel[64];
+      if (settings.buttonDebug) {
+        // "e<Enter> v<Version> s<types seen in other panels>"
+        char seen[24] = {0};
+        for (int i = 0, len = 0; (i < seenIconCount) && (len < (int)sizeof(seen) - 4); i++)
+          len += snprintf(&seen[len], sizeof(seen) - len, "%s%d", i ? "," : "", seenIconTypes[i]);
+        snprintf(sortLabel, sizeof(sortLabel), "Sort: %s e%d v%d s%s", activeMenu->sortRecent ? "[Recent]" : "[A-Z]", enterIconType, versionIconType,
+                 seen);
+      } else
         snprintf(sortLabel, sizeof(sortLabel), "Sort: %s", activeMenu->sortRecent ? "[Recent]" : "[A-Z]");
       DrawNonSelectableItem(sortPromptX() + 28, settings.versionY, color, alpha, sortLabel);
       DrawNonSelectableItem(settings.versionX + 28, settings.versionY, color, alpha, "Back");
@@ -897,8 +913,12 @@ void drawIconLeft(int type, int X, int Y, int alpha) {
     }
 #endif
     DrawIcon(type, settings.enterX, settings.enterY, alpha);
-  } else
+  } else {
+#ifndef HOSD
+    recordIconType(type);
+#endif
     DrawIcon(type, X, Y, alpha);
+  }
 }
 
 // drawIconRight() is called for only for last button icon (Options or Version)
@@ -925,8 +945,12 @@ void drawIconRight(int type, int X, int Y, int alpha) {
     }
 #endif
     DrawIcon(type, settings.versionX, settings.versionY, alpha);
-  } else
+  } else {
+#ifndef HOSD
+    recordIconType(type);
+#endif
     DrawIcon(type, X, Y, alpha);
+  }
 }
 
 // Patches OSDSYS button prompts
