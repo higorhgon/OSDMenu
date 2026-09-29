@@ -65,17 +65,26 @@ extern uint32_t size_gamescan_irx;
 
 // Loads the modules used by the experimental live games scan (games_live_scan).
 // Must be called before OSDSYS starts, while the patcher still owns SIF RPC
+// Returns 0 on success, or -(module number * 1000 + error) where module number is
+// 1 for iomanX, 2 for mmceman and 3 for gamescan, and error is 999 if the module refused to stay resident
 int loadLiveScanModules() {
-  int ret, iopret;
-  ret = SifExecModuleBuffer(iomanX_irx, size_iomanX_irx, 0, NULL, &iopret);
-  if ((ret < 0) || (iopret == 1))
-    return -1;
-  ret = SifExecModuleBuffer(mmceman_irx, size_mmceman_irx, 0, NULL, &iopret);
-  if ((ret < 0) || (iopret == 1))
-    return -2;
-  ret = SifExecModuleBuffer(gamescan_irx, size_gamescan_irx, 0, NULL, &iopret);
-  if ((ret < 0) || (iopret == 1))
-    return -3;
+  struct {
+    void *irx;
+    uint32_t size;
+  } modules[] = {
+      {iomanX_irx, size_iomanX_irx},
+      {mmceman_irx, size_mmceman_irx},
+      {gamescan_irx, size_gamescan_irx},
+  };
+
+  for (int i = 0; i < 3; i++) {
+    int iopret = 0;
+    int ret = SifExecModuleBuffer(modules[i].irx, modules[i].size, 0, NULL, &iopret);
+    if (ret < 0)
+      return -((i + 1) * 1000 - ret);
+    if (iopret == 1)
+      return -((i + 1) * 1000 + 999);
+  }
   return 0;
 }
 #endif

@@ -177,8 +177,11 @@ void patchExecuteOSDSYS(void *epc, void *gp, int argc, char *argv[]) {
 #endif
 
 #ifdef LIVESCAN
-  if (settings.gamesLiveScan && settings.gamesUseMMCE)
-    loadLiveScanModules();
+  if (settings.gamesLiveScan && settings.gamesUseMMCE) {
+    settings.liveScanBoot = loadLiveScanModules();
+    if (!settings.liveScanBoot && !liveScanProbe())
+      settings.liveScanBoot = LIVESCAN_BOOT_NOT_FOUND;
+  }
 #endif
 
   if ((void *)launcher_elf_addr == (void *)EXTRA_RELOC_ADDR) {

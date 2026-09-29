@@ -214,7 +214,11 @@ static void failLiveScan(const char *label) {
   liveScanDisabled = 1;
   setGamesLabels(label);
   showGamesEntries();
+  menuInfo->currentEntry = 2 + settings.gamesCount + 1; // Keep the cursor on "Refresh list"
 }
+
+// Returns 1 if gamescan.irx is in IOP RAM. Used right after loading it, before OSDSYS starts
+int liveScanProbe(void) { return findLiveScan() != 0; }
 
 // Starts a live scan and shows "Scanning..." until it's done.
 // Returns 0 if the live scan is not enabled, so the launcher scans instead
@@ -233,7 +237,16 @@ static int startLiveScan(void) {
   if (!liveScanAddr)
     liveScanAddr = findLiveScan();
   if (!liveScanAddr) {
-    failLiveScan("Refresh list (live scan: module not found)");
+    char label[NAME_LEN];
+    if (settings.liveScanBoot == LIVESCAN_BOOT_NOT_LOADED)
+      strcpy(label, "Refresh list (live scan: modules not loaded)");
+    else if (settings.liveScanBoot == LIVESCAN_BOOT_NOT_FOUND)
+      strcpy(label, "Refresh list (live scan: loaded but not found)");
+    else if (settings.liveScanBoot < 0)
+      snprintf(label, sizeof(label), "Refresh list (live scan: load error %d)", settings.liveScanBoot);
+    else // Found before OSDSYS started, so OSDSYS must have reset the IOP
+      strcpy(label, "Refresh list (live scan: lost after OSD start)");
+    failLiveScan(label);
     return 1;
   }
 

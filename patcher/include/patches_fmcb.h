@@ -6,6 +6,11 @@
 // Patches OSD menu to include custom menu entries
 void patchMenu(uint8_t *osd);
 
+#if !defined(HOSD) && defined(GAMES_MENU)
+// Returns 1 if the live games scan module is in IOP RAM
+int liveScanProbe(void);
+#endif
+
 // Patches menu drawing functions
 void patchMenuDraw(uint8_t *osd);
 

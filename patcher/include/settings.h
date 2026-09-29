@@ -45,6 +45,10 @@ typedef enum {
 } OSDBoot;
 
 // Patcher settings struct, contains all configurable patch settings and menu items
+// settings.liveScanBoot values besides the loadLiveScanModules() result
+#define LIVESCAN_BOOT_NOT_LOADED 1 // Modules were not loaded
+#define LIVESCAN_BOOT_NOT_FOUND 2  // Modules were loaded, but gamescan.irx wasn't found in IOP RAM
+
 typedef struct {
   uint32_t colorSelected[4];                 // The menu items color when selected
   uint32_t colorUnselected[4];               // The menu items color when not selected
@@ -81,6 +85,7 @@ typedef struct {
   int gamesReopen;      // Open the games submenu as soon as the menu is shown (set by GAMES_REOPEN_ARG)
   // Experimental live scan (games_live_scan), see livescan.h
   int gamesLiveScan;
+  int liveScanBoot; // loadLiveScanModules() result, or LIVESCAN_BOOT_* (for diagnostics)
   int gamesUseMMCE;
   char gamesCdFolder[32];
   char gamesDvdFolder[32];

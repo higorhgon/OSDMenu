@@ -483,6 +483,7 @@ void initConfig(void) {
   settings.gamesItemIdx = -1;
   settings.gamesCount = 0;
   settings.gamesLiveScan = 0;
+  settings.liveScanBoot = LIVESCAN_BOOT_NOT_LOADED;
   settings.gamesUseMMCE = 0;
   strcpy(settings.gamesCdFolder, "CD");
   strcpy(settings.gamesDvdFolder, "DVD");
