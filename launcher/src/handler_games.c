@@ -86,6 +86,21 @@ static GameEntry gameList[GAMES_MAX_ENTRIES];
 static int gameCount = 0;
 static int gameListTruncated = 0;
 
+// Diagnostic info captured during the scan, shown on-screen when no games
+// are found so a bad OSDMENU.CNF/folder layout can be diagnosed without a
+// serial debug cable
+#define GAMES_MAX_DIAG 8
+typedef struct {
+  char mountpoint[16];
+  int available; // mountpoint responded to the initial probe
+  int cdOpened;   // fileXioDopen() on the CD folder succeeded
+  int cdEntries;  // total directory entries seen (files + folders)
+  int dvdOpened;
+  int dvdEntries;
+} GamesScanDiag;
+static GamesScanDiag scanDiag[GAMES_MAX_DIAG];
+static int scanDiagCount = 0;
+
 // Adds a game to the in-memory list if there's room left
 static void addGameEntry(const char *relDir, const char *isoName, const char *displayName, GameMediaType media,
                           const char *neutrinoDriver) {
@@ -136,14 +151,19 @@ static int hasExactlyOneISO(const char *dirPath, char *isoNameOut, size_t isoNam
 
 // Scans one folder (e.g. "mass0:/DVD") for games: flat *.iso files, or
 // one-level subfolders containing exactly one *.iso inside (display name is
-// then the subfolder name, matching common per-game folder organization)
-static void scanFolder(const char *mountpoint, const char *folder, GameMediaType media, const char *neutrinoDriver) {
+// then the subfolder name, matching common per-game folder organization).
+// Returns 1 if the folder was opened at all (regardless of how many games
+// were found in it), 0 if it doesn't exist on this device. *entriesOut is
+// set to the total number of directory entries seen (excluding . and ..).
+static int scanFolder(const char *mountpoint, const char *folder, GameMediaType media, const char *neutrinoDriver, int *entriesOut) {
+  *entriesOut = 0;
+
   char dirPath[GAMES_REL_PATH_LEN];
   snprintf(dirPath, sizeof(dirPath), "%s/%s", mountpoint, folder);
 
   int dfd = fileXioDopen(dirPath);
   if (dfd < 0)
-    return; // Folder doesn't exist on this device — not an error
+    return 0; // Folder doesn't exist on this device — not an error
 
   char relDir[GAMES_REL_PATH_LEN];
   snprintf(relDir, sizeof(relDir), "/%s", folder);
@@ -152,6 +172,7 @@ static void scanFolder(const char *mountpoint, const char *folder, GameMediaType
   while (fileXioDread(dfd, &dirent) > 0) {
     if (!strcmp(dirent.name, ".") || !strcmp(dirent.name, ".."))
       continue;
+    (*entriesOut)++;
 
     if (FIO_S_ISDIR(dirent.stat.mode)) {
       char subDirPath[GAMES_REL_PATH_LEN];
@@ -173,6 +194,7 @@ static void scanFolder(const char *mountpoint, const char *folder, GameMediaType
       addGameEntry(relDir, dirent.name, dirent.name, media, neutrinoDriver);
   }
   fileXioDclose(dfd);
+  return 1;
 }
 
 static int gameEntryCompare(const void *a, const void *b) { return strcasecmp(((const GameEntry *)a)->name, ((const GameEntry *)b)->name); }
@@ -181,6 +203,7 @@ static int gameEntryCompare(const void *a, const void *b) { return strcasecmp(((
 static void scanAllDevices(GamesConfig *cfg) {
   gameCount = 0;
   gameListTruncated = 0;
+  scanDiagCount = 0;
 
   for (size_t i = 0; i < GAMES_DEVICE_COUNT; i++) {
     const GamesDeviceEntry *dev = &gamesDevices[i];
@@ -199,33 +222,56 @@ static void scanAllDevices(GamesConfig *cfg) {
 #endif
 
     for (int idx = 0; idx < dev->mountCount; idx++) {
-      char mountpoint[16];
-      snprintf(mountpoint, sizeof(mountpoint), dev->mountFmt, idx);
+      if (scanDiagCount >= GAMES_MAX_DIAG)
+        break;
+      GamesScanDiag *diag = &scanDiag[scanDiagCount++];
+      memset(diag, 0, sizeof(*diag));
+      snprintf(diag->mountpoint, sizeof(diag->mountpoint), dev->mountFmt, idx);
 
-      // MMCE doesn't go through the BDM/FAT layer and enumerates immediately;
-      // BDM-backed devices (USB/MX4SIO) may still be settling
+      // MMCE doesn't go through the BDM/FAT layer and enumerates immediately
+      // (handler_mc.c:handleMMCE does the same single-shot check when
+      // launching apps from MMCE); BDM-backed devices (USB/MX4SIO) may still
+      // be settling after initModules()
       int attempts = (dev->device == Device_MMCE) ? 1 : GAMES_PROBE_ATTEMPTS;
-      int available = 0;
       while (attempts > 0) {
-        int fd = open(mountpoint, O_DIRECTORY | O_RDONLY);
+        int fd = open(diag->mountpoint, O_DIRECTORY | O_RDONLY);
         if (fd >= 0) {
           close(fd);
-          available = 1;
+          diag->available = 1;
           break;
         }
         attempts--;
         if (attempts > 0)
           sleep(1);
       }
-      if (!available)
+      if (!diag->available)
         continue;
 
-      scanFolder(mountpoint, cfg->cdFolder, GameMedia_CD, dev->neutrinoDriver);
-      scanFolder(mountpoint, cfg->dvdFolder, GameMedia_DVD, dev->neutrinoDriver);
+      diag->cdOpened = scanFolder(diag->mountpoint, cfg->cdFolder, GameMedia_CD, dev->neutrinoDriver, &diag->cdEntries);
+      diag->dvdOpened = scanFolder(diag->mountpoint, cfg->dvdFolder, GameMedia_DVD, dev->neutrinoDriver, &diag->dvdEntries);
     }
   }
 
   qsort(gameList, gameCount, sizeof(GameEntry), gameEntryCompare);
+}
+
+// Prints what the scan actually saw, per mountpoint, so a misconfigured
+// folder/device can be diagnosed from the screen alone (no serial cable)
+static void printScanDiagnostics(GamesConfig *cfg) {
+  scr_printf(" Nenhum jogo encontrado. Diagnostico:\n");
+  if (scanDiagCount == 0) {
+    scr_printf(" Nenhum dispositivo habilitado em games_device_*\n");
+    return;
+  }
+  for (int i = 0; i < scanDiagCount; i++) {
+    GamesScanDiag *d = &scanDiag[i];
+    if (!d->available) {
+      scr_printf(" %s nao respondeu (dispositivo ausente/nao pronto)\n", d->mountpoint);
+      continue;
+    }
+    scr_printf(" %s %s=%s(%d) %s=%s(%d)\n", d->mountpoint, cfg->cdFolder, d->cdOpened ? "ok" : "n/a", d->cdEntries, cfg->dvdFolder,
+               d->dvdOpened ? "ok" : "n/a", d->dvdEntries);
+  }
 }
 
 // Draws the current page of the list, with the selected row highlighted
@@ -421,7 +467,8 @@ int handleGames(GamesConfig *cfg) {
 
   if (gameCount == 0) {
     msg("Games: No games found in %s/%s folders\n", cfg->cdFolder, cfg->dvdFolder);
-    sleep(3);
+    printScanDiagnostics(cfg);
+    sleep(15); // Long enough to read/photograph before returning to the clock
     freeGamesConfig(cfg);
     ExecOSD(0, NULL);
     return -ENOENT;

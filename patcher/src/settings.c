@@ -23,8 +23,14 @@ uint8_t *embedded_cnf_addr = embedded_cnf;
 // getCNFString is the main CNF parser called for each CNF variable in a CNF file.
 // Input and output data is handled via its pointer parameters.
 // The return value flags 'false' when no variable is found. (normal at EOF)
+// pToken/pName/pValue are unsigned char* rather than char* so that bytes >= 0x80
+// (e.g. a UTF-8 multi-byte character in a comment or menu item name) compare as
+// large positive values instead of negative ones on toolchains where char is
+// signed (the default for the MIPS ps2dev toolchain) — otherwise such a byte can
+// satisfy `> '\0'` as false and get the "seek line end"/"skip whitespace" loops
+// below stuck forever without ever reaching '\0'/'\r'/'\n'.
 int getCNFString(char **cnfPos, char **name, char **value) {
-  char *pName, *pValue, *pToken = *cnfPos;
+  unsigned char *pName, *pValue, *pToken = (unsigned char *)*cnfPos;
 
 nextLine:
   while ((*pToken <= ' ') && (*pToken > '\0'))
@@ -66,9 +72,9 @@ nextLine:
   while ((*pToken <= ' ') && (*pToken > '\0'))
     pToken += 1; // Skip following whitespace, if any
 
-  *cnfPos = pToken; // Set new CNF file position
-  *name = pName;    // Set found variable name
-  *value = pValue;  // Set found variable value
+  *cnfPos = (char *)pToken; // Set new CNF file position
+  *name = (char *)pName;    // Set found variable name
+  *value = (char *)pValue;  // Set found variable value
   return 1;
 }
 

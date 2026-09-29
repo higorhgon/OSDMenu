@@ -28,7 +28,7 @@ ps1drv_use_ps1vn = 0
 app_gameid = 0
 # path_DKWDRV_ELF = mc?:/BOOT/DKWDRV.ELF
 # --------------------------------------------------
-# Games menu options (read by the launcher, not the patcher — see launcher/README.md)
+# Games menu options (read by the launcher, not the patcher - see launcher/README.md)
 # games_device_usb = 1
 # games_device_mx4sio = 1
 # games_device_mmce = 1
