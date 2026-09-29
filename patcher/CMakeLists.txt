@@ -147,6 +147,7 @@ list(APPEND ELF_SOURCES ${launcher_source})
 set(PATCHER_LIVESCAN OFF)
 if(NOT PATCHER_HOSD AND LAUNCHER_GAMES_MENU AND LAUNCHER_MMCE)
   set(PATCHER_LIVESCAN ON)
+  list(APPEND EE_SOURCES ${PATCHER_SOURCE_DIR}/src/livescan_diag.c)
   set(GAMESCAN_IRX "${PATCHER_SOURCE_DIR}/iop/gamescan/gamescan.irx")
   file(GLOB GAMESCAN_SOURCES "${PATCHER_SOURCE_DIR}/iop/gamescan/src/*" "${PATCHER_SOURCE_DIR}/iop/gamescan/src/include/*"
        "${PATCHER_SOURCE_DIR}/iop/gamescan/Makefile" "${CMAKE_SOURCE_DIR}/common/include/livescan.h")

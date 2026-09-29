@@ -181,6 +181,8 @@ void patchExecuteOSDSYS(void *epc, void *gp, int argc, char *argv[]) {
     settings.liveScanBoot = loadLiveScanModules();
     if (!settings.liveScanBoot && !liveScanProbe())
       settings.liveScanBoot = LIVESCAN_BOOT_NOT_FOUND;
+    if (settings.gamesLiveScan == 2)
+      writeLiveScanDiagnostics((uint8_t *)epc);
   }
 #endif
 

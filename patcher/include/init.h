@@ -1,5 +1,6 @@
 #ifndef _INIT_H_
 #define _INIT_H_
+#include <stdint.h>
 
 #define USER_MEM_START_ADDR 0x110100
 #define USER_MEM_END_ADDR 0x2000000
@@ -17,6 +18,9 @@ void resetModules();
 #ifdef LIVESCAN
 // Loads the modules used by the experimental live games scan
 int loadLiveScanModules();
+
+// Writes mc?:/SYS-CONF/OSDMLIVE.LOG with the OSDSYS module loading code (games_live_scan = 2)
+void writeLiveScanDiagnostics(uint8_t *osd);
 #endif
 
 #ifdef HOSD
