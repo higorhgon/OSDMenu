@@ -1,5 +1,9 @@
 # OSDMenu
 
+> **Unofficial fork** of [OSDMenu](https://github.com/pcm720/OSDMenu) by pcm720, modified by higorhgon: games submenus,
+> network games and menu groups. Not endorsed by the OSDMenu authors; report issues with this fork here, not upstream.
+> See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the licenses.
+
 Patches for OSDSYS and HDD OSD (Browser 2.0) based on Free McBoot 1.8.  
 
 ## Usage

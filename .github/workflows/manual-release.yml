@@ -87,6 +87,15 @@ jobs:
           fi
           git log -1 --format='commit: %H%nbranch: ${{ github.ref_name }}%ndate:   %cI' > package/BUILD-INFO.txt
 
+          # Licenses: the Free McBoot License must be distributed with the binaries,
+          # and the lwIP notice must be reproduced in the documentation of binary releases
+          mkdir -p package/LICENSES
+          cp THIRD-PARTY-NOTICES.md package/
+          cp patcher/LICENSE package/LICENSES/FreeMcBoot-LICENSE.txt
+          cp launcher/LICENSE package/LICENSES/AFL-3.0.txt
+          cp launcher/iop/mmceman/LICENSE package/LICENSES/mmceman-MIT.txt
+          cp licenses/* package/LICENSES/
+
       - uses: actions/upload-artifact@v4
         with:
           name: package
