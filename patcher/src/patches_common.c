@@ -65,9 +65,9 @@ void patchExecuteOSDSYS(void *epc, void *gp, int argc, char *argv[]) {
     patchMenuButtonPanel((uint8_t *)epc);
   }
 
-#if !defined(HOSD) && defined(GAMES_MENU)
-  // Read the controller to close the games submenu with Circle
-  if ((settings.submenus[SUBMENU_GAMES].itemIdx >= 0) || (settings.submenus[SUBMENU_PSX].itemIdx >= 0))
+#ifndef HOSD
+  // Read the controller to close the games submenus and menu groups with Circle
+  if ((settings.submenus[SUBMENU_GAMES].itemIdx >= 0) || (settings.submenus[SUBMENU_PSX].itemIdx >= 0) || settings.groupCount)
     patchPadPortOpen((uint8_t *)epc);
 #endif
 

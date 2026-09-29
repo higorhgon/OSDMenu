@@ -66,6 +66,16 @@ typedef struct {
   uint8_t order[CUSTOM_ITEMS];   // Cache index of the game shown at each position
 } GamesSubmenu;
 
+// Menu groups (group_OSDSYS_ITEM_<idx>): each group is shown as a "<name> >" entry after "Games >"/"PSX >",
+// in alphabetical order, and opens a submenu with its items in CNF order
+#define MENU_GROUPS 32
+#define GROUP_MENU_IDX_BASE 9000 // menuItemIdx of the group entries: GROUP_MENU_IDX_BASE + group index
+
+typedef struct {
+  int first; // First menuItemName/menuItemIdx slot of the group's items, stored after the regular entries
+  int count; // Number of items
+} MenuGroup;
+
 // Patcher settings struct, contains all configurable patch settings and menu items
 typedef struct {
   uint32_t colorSelected[4];                 // The menu items color when selected
@@ -98,6 +108,10 @@ typedef struct {
   char bootPath[64]; // argv[0] of the patcher, passed to the launcher so it can return to OSDMenu
   int reopenSubmenu; // SUBMENU_* + 1 to open as soon as the menu is shown (GAMES_REOPEN_ARG/PSX_REOPEN_ARG), 0 for none
   int buttonDebug;   // Show the OSDSYS button icon types in the submenu prompts (games_button_debug)
+  MenuGroup groups[MENU_GROUPS];
+  int groupCount;
+  int groupBackSlot; // menuItemName slot of the groups' "< Back" label
+  int menuSlotsUsed; // menuItemName slots used by the regular entries and the group items
   // Experimental live scan (games_live_scan), see livescan.h
   int gamesLiveScan;
   int liveScanBoot; // loadLiveScanModules() result, or LIVESCAN_BOOT_* (for diagnostics)

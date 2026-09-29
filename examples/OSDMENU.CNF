@@ -58,6 +58,8 @@ name_OSDSYS_ITEM_2 = wLaunchELF
 path1_OSDSYS_ITEM_2 = mc?:/BOOT/BOOT.ELF
 path2_OSDSYS_ITEM_2 = mmce?:/apps/wLaunchELF.elf
 path3_OSDSYS_ITEM_2 = usb:/apps/wLaunchELF.elf
+# Optional: shows the entry in an "Apps >" submenu instead of the main menu
+# group_OSDSYS_ITEM_2 = Apps
 # --------------------------------------------------
 name_OSDSYS_ITEM_200 = Shutdown
 path1_OSDSYS_ITEM_200 = POWEROFF

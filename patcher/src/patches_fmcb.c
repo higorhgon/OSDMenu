@@ -37,6 +37,8 @@ static struct OSDMenuInfo *menuInfo = NULL;
 static GamesSubmenu *activeMenu = NULL;
 // Whether the games submenu only shows "Scanning..." (games_live_scan)
 static int liveScanActive = 0;
+// Menu group currently replacing the custom menu entries, NULL when the regular entries are shown
+static MenuGroup *activeGroup = NULL;
 #endif
 
 // Number of custom entries currently shown after "Browser" and "System Configuration"
@@ -46,6 +48,8 @@ static int customItemCount(void) {
     return 1; // "Scanning..."
   if (activeMenu)
     return activeMenu->count + 2; // games + "back" + "refresh"
+  if (activeGroup)
+    return activeGroup->count + 1; // "back" + items
 #endif
   return settings.menuItemCount;
 }
@@ -96,7 +100,7 @@ static void setMenuEntry(int pos, int slot) {
   }
 }
 
-static void closeGamesMenu(void);
+static void closeSubmenu(void);
 
 // Fills menu->order: games in cache order (by name), or most recently played first,
 // followed by the games that were never played in name order
@@ -176,15 +180,15 @@ static void pageGamesMenu(int direction) {
 }
 
 // Handles the submenu buttons OSDSYS doesn't: Circle/Triangle to go back,
-// Square to change the sort order, Left/Right to move a page
-static void handleGamesMenuButtons(void) {
+// Square to change the sort order of a games submenu, Left/Right to move a page
+static void handleSubmenuButtons(void) {
   uint16_t pressed = padNewPresses();
   if (!pressed)
     return;
 
   if (pressed & padBackButtons())
-    closeGamesMenu();
-  else if (pressed & PADB_SQUARE)
+    closeSubmenu();
+  else if ((pressed & PADB_SQUARE) && activeMenu)
     toggleGamesSort();
   else if (pressed & PADB_RIGHT)
     pageGamesMenu(1);
@@ -419,20 +423,46 @@ static void reopenGamesMenu(void) {
 }
 
 // Restores the regular custom entries and the cursor position
-static void closeGamesMenu(void) {
+static void closeSubmenu(void) {
   for (int i = 0; i < settings.menuItemCount; i++)
     setMenuEntry(i, i);
 
   menuInfo->entryCount = 2 + settings.menuItemCount;
   menuInfo->currentEntry = gamesMenuReturnEntry;
   activeMenu = NULL;
+  activeGroup = NULL;
+}
+
+// Replaces the custom entries with "< Back" and the items of the group
+static void openGroupMenu(MenuGroup *group) {
+  gamesMenuReturnEntry = menuInfo->currentEntry;
+  setMenuEntry(0, settings.groupBackSlot);
+  for (int i = 0; i < group->count; i++)
+    setMenuEntry(1 + i, group->first + i);
+
+  menuInfo->entryCount = 3 + group->count;
+  menuInfo->currentEntry = (group->count > 0) ? 3 : 2; // First item
+  activeGroup = group;
+}
+
+// Handles X on an entry of the active group
+static void handleGroupMenuEntry(int pos) {
+  if (pos == 0) {
+    closeSubmenu();
+    return;
+  }
+
+  int slot = activeGroup->first + pos - 1;
+  if (settings.menuItemName[slot][0] == '$' && settings.menuItemName[slot][1] == '!')
+    return;
+  launchMenuItem(settings.menuItemIdx[slot], "");
 }
 
 // Handles X on an entry of the active submenu
 static void handleGamesMenuEntry(int pos) {
   GamesSubmenu *menu = activeMenu;
   if (pos == 0) {
-    closeGamesMenu();
+    closeSubmenu();
     return;
   }
 
@@ -449,6 +479,20 @@ static void handleGamesMenuEntry(int pos) {
   char mode[16];
   sprintf(mode, ":g%d", menu->order[pos - 1]);
   launchGamesMode(menu, mode);
+}
+#endif
+
+#ifndef HOSD
+// Called once per frame: polls the live scan, or the buttons of the games submenu or menu group
+static void pollSubmenu(void) {
+#ifdef GAMES_MENU
+  if (liveScanActive) {
+    pollLiveScan();
+    return;
+  }
+#endif
+  if (activeMenu || activeGroup)
+    handleSubmenuButtons();
 }
 #endif
 
@@ -469,6 +513,11 @@ int handleMenuEntry(int selected) {
       handleGamesMenuEntry(pos);
     return 0;
   }
+  if (activeGroup) {
+    if (pos < customItemCount())
+      handleGroupMenuEntry(pos);
+    return 0;
+  }
 #endif
 
   if (pos >= settings.menuItemCount)
@@ -480,6 +529,11 @@ int handleMenuEntry(int selected) {
   int idx = settings.menuItemIdx[pos];
 
 #ifndef HOSD
+  if ((idx >= GROUP_MENU_IDX_BASE) && (idx < GROUP_MENU_IDX_BASE + settings.groupCount)) {
+    openGroupMenu(&settings.groups[idx - GROUP_MENU_IDX_BASE]);
+    return 0;
+  }
+
   GamesSubmenu *menu = findSubmenu(idx);
   if (menu) {
     if (menu->cacheLoaded) {
@@ -608,11 +662,9 @@ void drawMenuItemSelected(int X, int Y, uint32_t *color, int alpha, const char *
   if (settings.reopenSubmenu)
     reopenGamesMenu();
 #endif
-#if !defined(HOSD) && defined(GAMES_MENU)
-  if (liveScanActive && (num == 0))
-    pollLiveScan();
-  else if (activeMenu && (num == 0))
-    handleGamesMenuButtons();
+#ifndef HOSD
+  if (num == 0)
+    pollSubmenu();
 #endif
 #ifdef HOSD
   asm volatile("move %0, $s1" : "=r"(num)::); // For HDD-OSD, get menu index from s1 register
@@ -662,11 +714,9 @@ void drawMenuItemUnselected(int X, int Y, uint32_t *color, int alpha, const char
   if (settings.reopenSubmenu)
     reopenGamesMenu();
 #endif
-#if !defined(HOSD) && defined(GAMES_MENU)
-  if (liveScanActive && (num == 0))
-    pollLiveScan();
-  else if (activeMenu && (num == 0))
-    handleGamesMenuButtons();
+#ifndef HOSD
+  if (num == 0)
+    pollSubmenu();
 #endif
 #ifdef HOSD
   asm volatile("move %0, $s1" : "=r"(num)::); // For HDD-OSD, get menu index from s1 register
@@ -838,7 +888,7 @@ static void deriveSubmenuIcons(void) {
 }
 
 // Returns 1 when the main menu button panel shows a games submenu
-static int showSubmenuPrompts(void) { return (ButtonsPanel_Type == MAINMENU_PANEL) && activeMenu && !liveScanActive; }
+static int showSubmenuPrompts(void) { return (ButtonsPanel_Type == MAINMENU_PANEL) && ((activeMenu && !liveScanActive) || activeGroup); }
 
 // X coordinate of the "Sort" prompt, between Enter and Back
 static int sortPromptX(void) { return (settings.enterX + settings.versionX) / 2; }
@@ -873,6 +923,10 @@ void drawNonselectableEntryRight(int X, int Y, uint32_t *color, int alpha, const
       settings.versionY = Y;
 
 #ifndef HOSD
+    if (showSubmenuPrompts() && activeGroup) {
+      DrawNonSelectableItem(settings.versionX + 28, settings.versionY, color, alpha, "Back");
+      return;
+    }
     if (showSubmenuPrompts()) {
       char sortLabel[64];
       if (settings.buttonDebug) {
@@ -937,7 +991,7 @@ void drawIconRight(int type, int X, int Y, int alpha) {
       deriveSubmenuIcons();
     }
     if (showSubmenuPrompts()) {
-      if (sortIconType >= 0)
+      if ((sortIconType >= 0) && activeMenu)
         DrawIcon(sortIconType, sortPromptX(), settings.versionY, alpha);
       if (backIconType >= 0)
         DrawIcon(backIconType, settings.versionX, settings.versionY, alpha);

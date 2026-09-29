@@ -105,6 +105,7 @@ See the launcher [README](launcher/README.md) for more details.
 - Integrated Neutrino GSM for disc games and applications
 - Built-in "Games >" OSDSYS submenu listing PS2 games from `CD`/`DVD` folders on USB/MX4SIO/MMCE devices, a UDPFS server or an SMB share, launched directly via a user-installed standalone Neutrino or OPL
 - Built-in "PSX >" OSDSYS submenu listing PS1 games from `EMBER/games` on USB/MX4SIO/MMCE devices, launched directly via a user-installed Ember
+- Menu entries can be grouped into OSDSYS submenus with `group_OSDSYS_ITEM_???`
 - "Unlimited" number of paths for each entry
 - Support for 1080i and 480p (as line-doubled 240p) video modes
 - Support for "protokernel" systems (SCPH-10000, SCPH-15000) ported from Free McBoot 1.9 by reverse-engineering

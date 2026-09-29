@@ -1,8 +1,10 @@
 #include "settings.h"
 #include "defaults.h"
 #include "gs.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #define NEWLIB_PORT_AWARE
 #include <fileio.h>
 
@@ -35,6 +37,103 @@ static int insertMenuEntry(int pos, const char *name, int idx) {
   settings.menuItemIdx[pos] = idx;
   settings.menuItemCount++;
   return 1;
+}
+#endif
+
+#ifndef HOSD
+// group_OSDSYS_ITEM_<idx> lines, collected while parsing. The names point into the CNF buffer
+static int groupLineIdx[CUSTOM_ITEMS];
+static char *groupLineName[CUSTOM_ITEMS];
+static int groupLineCount = 0;
+
+// Returns the group of the menu item with the given index, or NULL
+static char *itemGroup(int idx) {
+  char *group = NULL;
+  for (int i = 0; i < groupLineCount; i++)
+    if (groupLineIdx[i] == idx)
+      group = groupLineName[i]; // The last line wins
+  return (group && group[0]) ? group : NULL;
+}
+
+// Moves the grouped menu items into groups. The entries are rebuilt in scratch as
+// the automatic entries ("Games >"/"PSX >"), one "<group> >" entry per group in
+// alphabetical order and the items without a group, followed by the items of each
+// group in CNF order and the groups' "< Back" label. Only the entries before the
+// group items are shown in the main menu (menuItemCount).
+static void buildMenuGroups(int autoEntries, uint8_t *scratch) {
+  char *names[MENU_GROUPS];
+  int itemGroupOf[CUSTOM_ITEMS];
+  int count = 0;
+  for (int i = autoEntries; i < settings.menuItemCount; i++) {
+    itemGroupOf[i] = -1;
+    char *group = itemGroup(settings.menuItemIdx[i]);
+    if (!group)
+      continue;
+
+    int g;
+    for (g = 0; g < count; g++)
+      if (!strcmp(names[g], group))
+        break;
+    if (g == count) {
+      if (count == MENU_GROUPS)
+        continue; // Too many groups, keep the item in the main menu
+      names[count++] = group;
+    }
+    itemGroupOf[i] = g;
+  }
+  // Keep the flat menu if the group entries and the "< Back" label don't fit
+  if (!count || (settings.menuItemCount + count + 1 > CUSTOM_ITEMS))
+    return;
+
+  // Alphabetical order of the groups
+  int order[MENU_GROUPS];
+  for (int i = 0; i < count; i++) {
+    int j = i;
+    while ((j > 0) && (strcasecmp(names[order[j - 1]], names[i]) > 0)) {
+      order[j] = order[j - 1];
+      j--;
+    }
+    order[j] = i;
+  }
+
+  char(*newNames)[NAME_LEN] = (void *)scratch;
+  int *newIdx = (int *)(scratch + CUSTOM_ITEMS * NAME_LEN);
+  int n = 0;
+  for (int i = 0; i < autoEntries; i++, n++) {
+    memcpy(newNames[n], settings.menuItemName[i], NAME_LEN);
+    newIdx[n] = settings.menuItemIdx[i];
+  }
+  for (int k = 0; k < count; k++, n++) {
+    snprintf(newNames[n], NAME_LEN, "%.*s >", NAME_LEN - 3, names[order[k]]);
+    newIdx[n] = GROUP_MENU_IDX_BASE + k;
+  }
+  for (int i = autoEntries; i < settings.menuItemCount; i++) {
+    if (itemGroupOf[i] >= 0)
+      continue;
+    memcpy(newNames[n], settings.menuItemName[i], NAME_LEN);
+    newIdx[n++] = settings.menuItemIdx[i];
+  }
+  int topCount = n;
+  for (int k = 0; k < count; k++) {
+    settings.groups[k].first = n;
+    for (int i = autoEntries; i < settings.menuItemCount; i++) {
+      if (itemGroupOf[i] != order[k])
+        continue;
+      memcpy(newNames[n], settings.menuItemName[i], NAME_LEN);
+      newIdx[n++] = settings.menuItemIdx[i];
+    }
+    settings.groups[k].count = n - settings.groups[k].first;
+  }
+  strcpy(newNames[n], "< Back");
+  newIdx[n] = 0;
+  settings.groupBackSlot = n++;
+
+  memcpy(settings.menuItemName, newNames, n * NAME_LEN);
+  memcpy(settings.menuItemIdx, newIdx, n * sizeof(int));
+  memset(scratch, 0, CUSTOM_ITEMS * (NAME_LEN + sizeof(int)));
+  settings.menuItemCount = topCount;
+  settings.groupCount = count;
+  settings.menuSlotsUsed = n;
 }
 #endif
 
@@ -238,6 +337,15 @@ int loadConfig(void) {
       settings.menuItemCount++;
       continue;
     }
+#ifndef HOSD
+    if (!strncmp(name, "group_OSDSYS_ITEM_", 18)) {
+      if (groupLineCount < CUSTOM_ITEMS) {
+        groupLineIdx[groupLineCount] = atoi(&name[18]);
+        groupLineName[groupLineCount++] = value;
+      }
+      continue;
+    }
+#endif
 #ifdef GAMES_MENU
     if (!strncmp(name, "games_device_", 13)) {
       if (atoi(value))
@@ -389,12 +497,9 @@ int loadConfig(void) {
     }
   }
 
-  // Clean up
-  memset(cnfPos, 0, cnfSize);
-
+  int pos = 0; // Number of automatic entries at the top of the menu
 #ifdef GAMES_MENU
   // Add "Games >" and "PSX >" as the first custom entries when any games_device_*/psx_device_* is enabled
-  int pos = 0;
   if (gamesEnabled && insertMenuEntry(pos, "Games >", GAMES_MENU_IDX)) {
     pos++;
 #ifndef HOSD
@@ -402,11 +507,24 @@ int loadConfig(void) {
 #endif
   }
   if (psxEnabled && insertMenuEntry(pos, "PSX >", PSX_MENU_IDX)) {
+    pos++;
 #ifndef HOSD
     settings.submenus[SUBMENU_PSX].itemIdx = PSX_MENU_IDX;
 #endif
   }
 #endif
+#ifndef HOSD
+  // The group names point into the CNF, so the groups are built before it's cleared,
+  // using the memory right after it
+  settings.menuSlotsUsed = settings.menuItemCount;
+  buildMenuGroups(pos, (uint8_t *)(0x1000000 + ((cnfSize + 64) & ~63)));
+  groupLineCount = 0;
+#else
+  (void)pos;
+#endif
+
+  // Clean up
+  memset(cnfPos, 0, cnfSize);
   return 0;
 }
 
@@ -472,8 +590,8 @@ void loadGamesCache(void) {
   if (!enabled)
     return;
 
-  int regionSize = (CUSTOM_ITEMS - settings.menuItemCount) / enabled;
-  int base = settings.menuItemCount;
+  int regionSize = (CUSTOM_ITEMS - settings.menuSlotsUsed) / enabled;
+  int base = settings.menuSlotsUsed;
   for (int i = 0; i < SUBMENU_COUNT; i++) {
     GamesSubmenu *menu = &settings.submenus[i];
     if (menu->itemIdx < 0)
@@ -550,6 +668,9 @@ void initConfig(void) {
   }
   settings.reopenSubmenu = 0;
   settings.buttonDebug = 0;
+  settings.groupCount = 0;
+  settings.groupBackSlot = -1;
+  settings.menuSlotsUsed = 0;
   settings.gamesLiveScan = 0;
   settings.liveScanBoot = LIVESCAN_BOOT_NOT_LOADED;
   settings.gamesUseMMCE = 0;
