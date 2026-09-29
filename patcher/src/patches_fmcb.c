@@ -10,6 +10,7 @@
 #ifdef GAMES_MENU
 #include "defaults.h"
 #include "livescan.h"
+#include "patches_pad.h"
 #include <stddef.h>
 #endif
 #include <kernel.h>
@@ -138,10 +139,26 @@ static void setGamesLabels(const char *refreshLabel) {
   snprintf(settings.menuItemName[base + 1], NAME_LEN, "%s", refreshLabel);
 }
 
-// IOP RAM is accessed with 32-bit uncached reads and writes only
+// IOP RAM is accessed with 32-bit uncached reads and writes only.
+// LIVESCAN_IOP_RAM is a kernel segment address, so like PS2SDK's smem_read()/smem_write(),
+// every access disables interrupts and switches to kernel mode, since OSDSYS runs in user mode
 #define LIVESCAN_FIELD(field) (liveScanAddr + offsetof(LiveScanShared, field))
-static inline uint32_t iopRead(uint32_t addr) { return *(volatile uint32_t *)addr; }
-static inline void iopWrite(uint32_t addr, uint32_t value) { *(volatile uint32_t *)addr = value; }
+static uint32_t iopRead(uint32_t addr) {
+  DI();
+  ee_kmode_enter();
+  uint32_t value = *(volatile uint32_t *)addr;
+  ee_kmode_exit();
+  EI();
+  return value;
+}
+
+static void iopWrite(uint32_t addr, uint32_t value) {
+  DI();
+  ee_kmode_enter();
+  *(volatile uint32_t *)addr = value;
+  ee_kmode_exit();
+  EI();
+}
 
 // Writes str into a NUL-padded field of size bytes (a multiple of 4)
 static void iopWriteString(uint32_t addr, const char *str, int size) {
@@ -168,12 +185,26 @@ static void iopReadString(uint32_t addr, char *out, int size) {
 }
 
 static uint32_t findLiveScan(void) {
-  for (uint32_t addr = LIVESCAN_IOP_RAM; addr < LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - sizeof(LiveScanShared); addr += 16) {
-    if ((iopRead(addr) == LIVESCAN_MAGIC0) && (iopRead(addr + 4) == LIVESCAN_MAGIC1) && (iopRead(addr + 8) == LIVESCAN_MAGIC2) &&
-        (iopRead(addr + 12) == LIVESCAN_MAGIC3))
-      return addr;
+  const uint32_t chunk = 0x10000; // Interrupts are re-enabled between chunks
+  uint32_t found = 0;
+  for (uint32_t start = LIVESCAN_IOP_RAM; !found && (start < LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE); start += chunk) {
+    uint32_t end = start + chunk;
+    if (end > LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - sizeof(LiveScanShared))
+      end = LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - sizeof(LiveScanShared);
+
+    DI();
+    ee_kmode_enter();
+    for (uint32_t addr = start; addr < end; addr += 16) {
+      volatile uint32_t *w = (volatile uint32_t *)addr;
+      if ((w[0] == LIVESCAN_MAGIC0) && (w[1] == LIVESCAN_MAGIC1) && (w[2] == LIVESCAN_MAGIC2) && (w[3] == LIVESCAN_MAGIC3)) {
+        found = addr;
+        break;
+      }
+    }
+    ee_kmode_exit();
+    EI();
   }
-  return 0;
+  return found;
 }
 
 // Ends the live scan with an error shown in the "Refresh list" label.
@@ -477,6 +508,8 @@ void drawMenuItemSelected(int X, int Y, uint32_t *color, int alpha, const char *
 #if !defined(HOSD) && defined(GAMES_MENU)
   if (liveScanActive && (num == 0))
     pollLiveScan();
+  else if (gamesMenuActive && (num == 0) && padBackPressed())
+    closeGamesMenu();
 #endif
 #ifdef HOSD
   asm volatile("move %0, $s1" : "=r"(num)::); // For HDD-OSD, get menu index from s1 register
@@ -529,6 +562,8 @@ void drawMenuItemUnselected(int X, int Y, uint32_t *color, int alpha, const char
 #if !defined(HOSD) && defined(GAMES_MENU)
   if (liveScanActive && (num == 0))
     pollLiveScan();
+  else if (gamesMenuActive && (num == 0) && padBackPressed())
+    closeGamesMenu();
 #endif
 #ifdef HOSD
   asm volatile("move %0, $s1" : "=r"(num)::); // For HDD-OSD, get menu index from s1 register

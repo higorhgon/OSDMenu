@@ -4,6 +4,7 @@
 #include "launcher.h"
 #include "patches_fmcb.h"
 #include "patches_osdmenu.h"
+#include "patches_pad.h"
 #include "patterns_common.h"
 #include "settings.h"
 #include <kernel.h>
@@ -63,6 +64,12 @@ void patchExecuteOSDSYS(void *epc, void *gp, int argc, char *argv[]) {
     patchMenuInfiniteScrolling((uint8_t *)epc, 0);
     patchMenuButtonPanel((uint8_t *)epc);
   }
+
+#if !defined(HOSD) && defined(GAMES_MENU)
+  // Read the controller to close the games submenu with Circle
+  if (settings.gamesItemIdx >= 0)
+    patchPadPortOpen((uint8_t *)epc);
+#endif
 
   // Apply browser application launch patch
   patchBrowserApplicationLaunch((uint8_t *)epc, 0);
