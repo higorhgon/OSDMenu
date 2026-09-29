@@ -44,11 +44,26 @@ typedef enum {
   OSD_BOOT_BROWSER,
 } OSDBoot;
 
-// Patcher settings struct, contains all configurable patch settings and menu items
 // settings.liveScanBoot values besides the loadLiveScanModules() result
 #define LIVESCAN_BOOT_NOT_LOADED 1 // Modules were not loaded
 #define LIVESCAN_BOOT_NOT_FOUND 2  // Modules were loaded, but gamescan.irx wasn't found in IOP RAM
 
+// Games submenus, shown by the automatic "Games >" and "PSX >" entries
+#define SUBMENU_GAMES 0 // PS2 games (GAMES_MENU_IDX, GAMES_CACHE_PATH)
+#define SUBMENU_PSX 1   // PS1 games (PSX_MENU_IDX, PSX_CACHE_PATH)
+#define SUBMENU_COUNT 2
+
+// Game names are stored in menuItemName after the regular menu items, each submenu
+// in its own fixed region of max + 2 slots: the names, then the "< Back" and "Refresh list" labels
+typedef struct {
+  int itemIdx;     // GAMES_MENU_IDX or PSX_MENU_IDX when the entry is shown, -1 otherwise
+  int base;        // First menuItemName slot of the region
+  int max;         // Maximum number of names
+  int count;       // Number of names loaded
+  int cacheLoaded; // Whether the cache file was loaded (or the list was scanned live)
+} GamesSubmenu;
+
+// Patcher settings struct, contains all configurable patch settings and menu items
 typedef struct {
   uint32_t colorSelected[4];                 // The menu items color when selected
   uint32_t colorUnselected[4];               // The menu items color when not selected
@@ -76,13 +91,9 @@ typedef struct {
 #ifndef HOSD
   char dkwdrvPath[50]; // Path to DKWDRV
   uint8_t mcSlot;      // Memory card slot contaning currently loaded OSDMENU.CNF
-  // Games submenu. Game names are stored in menuItemName right after the
-  // regular menu items, followed by the "back" and "refresh" labels.
-  int gamesItemIdx;     // CNF index of the entry with path "games", -1 if none
-  int gamesCount;       // Number of games loaded from GAMES_CACHE_PATH
-  int gamesCacheLoaded; // Whether GAMES_CACHE_PATH existed on boot
-  char bootPath[64];    // argv[0] of the patcher, passed to the launcher so it can return to OSDMenu
-  int gamesReopen;      // Open the games submenu as soon as the menu is shown (set by GAMES_REOPEN_ARG)
+  GamesSubmenu submenus[SUBMENU_COUNT];
+  char bootPath[64]; // argv[0] of the patcher, passed to the launcher so it can return to OSDMenu
+  int reopenSubmenu; // SUBMENU_* + 1 to open as soon as the menu is shown (GAMES_REOPEN_ARG/PSX_REOPEN_ARG), 0 for none
   // Experimental live scan (games_live_scan), see livescan.h
   int gamesLiveScan;
   int liveScanBoot; // loadLiveScanModules() result, or LIVESCAN_BOOT_* (for diagnostics)
@@ -98,7 +109,7 @@ extern PatcherSettings settings;
 int loadConfig(void);
 void initConfig(void);
 #ifndef HOSD
-// Loads game names for the games submenu from GAMES_CACHE_PATH
+// Reserves the menuItemName regions of the games submenus and loads the names from their caches
 void loadGamesCache(void);
 #endif
 

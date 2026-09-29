@@ -22,6 +22,20 @@ uint8_t *embedded_cnf_addr = embedded_cnf;
 
 #ifdef GAMES_MENU
 static int gamesEnabled = 0; // Set when any games_device_* key is enabled
+static int psxEnabled = 0;   // Set when any psx_device_* key is enabled
+
+// Inserts an automatic entry at pos of the custom menu. Returns 0 if the menu is full
+static int insertMenuEntry(int pos, const char *name, int idx) {
+  if (settings.menuItemCount >= CUSTOM_ITEMS)
+    return 0;
+
+  memmove(settings.menuItemName[pos + 1], settings.menuItemName[pos], (settings.menuItemCount - pos) * NAME_LEN);
+  memmove(&settings.menuItemIdx[pos + 1], &settings.menuItemIdx[pos], (settings.menuItemCount - pos) * sizeof(settings.menuItemIdx[0]));
+  strcpy(settings.menuItemName[pos], name);
+  settings.menuItemIdx[pos] = idx;
+  settings.menuItemCount++;
+  return 1;
+}
 #endif
 
 // getCNFString is the main CNF parser called for each CNF variable in a CNF file.
@@ -234,6 +248,11 @@ int loadConfig(void) {
 #endif
       continue;
     }
+    if (!strncmp(name, "psx_device_", 11)) {
+      if (atoi(value))
+        psxEnabled = 1;
+      continue;
+    }
 #ifndef HOSD
     if (!strcmp(name, "games_live_scan")) {
       settings.gamesLiveScan = atoi(value);
@@ -370,15 +389,17 @@ int loadConfig(void) {
   memset(cnfPos, 0, cnfSize);
 
 #ifdef GAMES_MENU
-  // Add "Games >" as the first custom entry when any games_device_* is enabled
-  if (gamesEnabled && (settings.menuItemCount < CUSTOM_ITEMS)) {
-    memmove(settings.menuItemName[1], settings.menuItemName[0], settings.menuItemCount * NAME_LEN);
-    memmove(&settings.menuItemIdx[1], &settings.menuItemIdx[0], settings.menuItemCount * sizeof(settings.menuItemIdx[0]));
-    strcpy(settings.menuItemName[0], "Games >");
-    settings.menuItemIdx[0] = GAMES_MENU_IDX;
-    settings.menuItemCount++;
+  // Add "Games >" and "PSX >" as the first custom entries when any games_device_*/psx_device_* is enabled
+  int pos = 0;
+  if (gamesEnabled && insertMenuEntry(pos, "Games >", GAMES_MENU_IDX)) {
+    pos++;
 #ifndef HOSD
-    settings.gamesItemIdx = GAMES_MENU_IDX;
+    settings.submenus[SUBMENU_GAMES].itemIdx = GAMES_MENU_IDX;
+#endif
+  }
+  if (psxEnabled && insertMenuEntry(pos, "PSX >", PSX_MENU_IDX)) {
+#ifndef HOSD
+    settings.submenus[SUBMENU_PSX].itemIdx = PSX_MENU_IDX;
 #endif
   }
 #endif
@@ -386,21 +407,10 @@ int loadConfig(void) {
 }
 
 #ifndef HOSD
-// Loads game names for the games submenu from GAMES_CACHE_PATH (written by the
-// launcher after a scan) into menuItemName, right after the regular items
-void loadGamesCache(void) {
-  if (settings.gamesItemIdx < 0)
-    return;
-
-  // Two slots are reserved for the "back" and "refresh" labels.
-  // Without room for them, the entry falls back to the launcher's own list.
-  int maxGames = CUSTOM_ITEMS - settings.menuItemCount - 2;
-  if (maxGames < 0) {
-    settings.gamesItemIdx = -1;
-    return;
-  }
-
-  char path[] = GAMES_CACHE_PATH;
+// Loads the names from cachePath (written by the launcher after a scan) into the submenu region
+static void loadSubmenuCache(GamesSubmenu *menu, const char *cachePath) {
+  char path[32];
+  strcpy(path, cachePath);
   if (settings.mcSlot == 1)
     path[2] = '1';
 
@@ -419,17 +429,49 @@ void loadGamesCache(void) {
 
   char *name, *value;
   while (getCNFString(&cnfPos, &name, &value)) {
-    if (strcmp(name, "game") || (settings.gamesCount >= maxGames))
+    if (strcmp(name, "game") || (menu->count >= menu->max))
       continue;
 
-    strncpy(settings.menuItemName[settings.menuItemCount + settings.gamesCount], value, NAME_LEN - 1);
-    settings.gamesCount++;
+    strncpy(settings.menuItemName[menu->base + menu->count], value, NAME_LEN - 1);
+    menu->count++;
   }
   memset(cnfStart, 0, cnfSize);
 
-  strcpy(settings.menuItemName[settings.menuItemCount + settings.gamesCount], "< Back");
-  strcpy(settings.menuItemName[settings.menuItemCount + settings.gamesCount + 1], "Refresh list");
-  settings.gamesCacheLoaded = 1;
+  strcpy(settings.menuItemName[menu->base + menu->count], "< Back");
+  strcpy(settings.menuItemName[menu->base + menu->count + 1], "Refresh list");
+  menu->cacheLoaded = 1;
+}
+
+// Splits the menuItemName slots left after the regular items between the enabled submenus
+// and loads their caches. Fixed regions keep a list from overwriting the other one when it
+// grows after a live scan
+void loadGamesCache(void) {
+  static const char *cachePaths[SUBMENU_COUNT] = {GAMES_CACHE_PATH, PSX_CACHE_PATH};
+  int enabled = 0;
+  for (int i = 0; i < SUBMENU_COUNT; i++)
+    if (settings.submenus[i].itemIdx >= 0)
+      enabled++;
+  if (!enabled)
+    return;
+
+  int regionSize = (CUSTOM_ITEMS - settings.menuItemCount) / enabled;
+  int base = settings.menuItemCount;
+  for (int i = 0; i < SUBMENU_COUNT; i++) {
+    GamesSubmenu *menu = &settings.submenus[i];
+    if (menu->itemIdx < 0)
+      continue;
+
+    // Two slots are reserved for the "back" and "refresh" labels.
+    // Without room for them, the entry falls back to the launcher's own list
+    if (regionSize < 3) {
+      menu->itemIdx = -1;
+      continue;
+    }
+    menu->base = base;
+    menu->max = regionSize - 2;
+    base += regionSize;
+    loadSubmenuCache(menu, cachePaths[i]);
+  }
 }
 #endif
 
@@ -480,14 +522,19 @@ void initConfig(void) {
 #ifndef HOSD
   settings.dkwdrvPath[0] = '\0'; // Can be null
   settings.mcSlot = 0;
-  settings.gamesItemIdx = -1;
-  settings.gamesCount = 0;
+  for (int i = 0; i < SUBMENU_COUNT; i++) {
+    settings.submenus[i].itemIdx = -1;
+    settings.submenus[i].base = 0;
+    settings.submenus[i].max = 0;
+    settings.submenus[i].count = 0;
+    settings.submenus[i].cacheLoaded = 0;
+  }
+  settings.reopenSubmenu = 0;
   settings.gamesLiveScan = 0;
   settings.liveScanBoot = LIVESCAN_BOOT_NOT_LOADED;
   settings.gamesUseMMCE = 0;
   strcpy(settings.gamesCdFolder, "CD");
   strcpy(settings.gamesDvdFolder, "DVD");
-  settings.gamesCacheLoaded = 0;
 #endif
 
   initVariables();

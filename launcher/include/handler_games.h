@@ -7,7 +7,16 @@
 
 // Settings parsed from OSDMENU.CNF by handler_osdm.c, consumed by handleGames().
 // neutrinoPath, neutrinoArgs, returnPath and oplPath are heap-allocated and owned by the caller.
+typedef enum {
+  GamesKind_PS2, // PS2 games from the CD/DVD folders, launched via Neutrino or OPL
+  GamesKind_PSX, // PS1 games from EMBER/games, launched via Ember
+} GamesKind;
+
 typedef struct {
+  GamesKind kind; // Set by handleOSDM from the menu item index
+  int psxUseUSB;  // psx_device_* keys
+  int psxUseMX4SIO;
+  int psxUseMMCE;
   int useUSB;
   int useMX4SIO;
   int useMMCE;
@@ -24,9 +33,11 @@ typedef struct {
 // handler_games.c
 //
 // osdmArg is the osdm path that led here. The patcher appends a mode suffix:
-//   ":s"  - scan the configured CD/DVD folders on the enabled devices
-//           (USB/MX4SIO/MMCE), write GAMES_CACHE_PATH and return to OSDMenu
-//   ":gN" - launch game N from GAMES_CACHE_PATH via neutrino.elf, no scan
+//   ":s"  - scan the enabled devices (USB/MX4SIO/MMCE), write the cache
+//           (GAMES_CACHE_PATH or PSX_CACHE_PATH) and return to OSDMenu
+//   ":gN" - launch game N from the cache without scanning
+// PS2 games come from the CD/DVD folders and run via Neutrino or OPL,
+// PS1 games (cfg->kind == GamesKind_PSX) come from EMBER/games and run via Ember.
 // followed by an optional "|<patcher path>" used to return to OSDMenu afterwards.
 // Without a suffix (e.g. HOSDMenu), scans and shows a full-screen list instead.
 // Only returns on error; otherwise control passes to launchPath() or ExecOSD().

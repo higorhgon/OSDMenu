@@ -125,7 +125,13 @@ DKWDRV and custom payload paths are limited to 49 characters.
 
 #### Games menu
 
-Enabling any of the `games_device_*` options adds a "Games >" entry at the top of the custom menu. It opens a submenu with PS2 games found on USB/MX4SIO/MMCE devices, launched via a user-installed standalone [Neutrino](https://github.com/rickgaiser/neutrino) (`neutrino.elf`, not bundled with OSDMenu). The list is cached in `mc?:/SYS-CONF/OSDGAMES.CNF` and only rescanned when it doesn't exist yet or when "Refresh list" is selected, so it adds no boot-time cost beyond reading that file. "< Back" returns to the main menu. HOSDMenu shows a full-screen list from the launcher instead. The entry is not shown by builds without the games menu (`LAUNCHER_GAMES_MENU`). See [launcher/README.md](../launcher/README.md#games-handler) for scan rules and current limitations (no cover art, no PS1 support, no network/SMB storage).
+Enabling any of the `games_device_*` options adds a "Games >" entry at the top of the custom menu. It opens a submenu with PS2 games found on USB/MX4SIO/MMCE devices, launched via a user-installed standalone [Neutrino](https://github.com/rickgaiser/neutrino) (`neutrino.elf`, not bundled with OSDMenu). The list is cached in `mc?:/SYS-CONF/OSDGAMES.CNF` and only rescanned when it doesn't exist yet or when "Refresh list" is selected, so it adds no boot-time cost beyond reading that file. "< Back" returns to the main menu. HOSDMenu shows a full-screen list from the launcher instead. The entry is not shown by builds without the games menu (`LAUNCHER_GAMES_MENU`). See [launcher/README.md](../launcher/README.md#games-handler) for scan rules and current limitations (no cover art, no network/SMB storage).
+
+Enabling any of the `psx_device_*` options adds a "PSX >" entry right below "Games >". It works the same way for PS1 games,
+launched via [Ember](https://github.com/Gageformer/Ember) (not bundled with OSDMenu) and cached in `mc?:/SYS-CONF/OSDPSX.CNF`.
+On each enabled device, Ember must be installed as `EMBER/ember.elf` with its games in `EMBER/games/<game>/`
+(one folder per game, with a `.cue` file inside), as described in Ember's documentation.
+When both submenus are enabled, the menu slots left after the regular entries are split evenly between them.
 
 These options are also read by the **launcher**:
 - `games_device_usb`, `games_device_mx4sio`, `games_device_mmce` — enable scanning each device type (default: all disabled)
@@ -137,6 +143,7 @@ These options are also read by the **launcher**:
 - `games_opl_path` — path to OPL, e.g. [RiptOPL](https://github.com/NathanNeurotic/Open-PS2-Loader) (required for `games_launcher = opl`)
 - `games_live_scan` — **experimental**, MMCE only. If enabled, "Refresh list" scans without leaving OSDMenu: the patcher loads `iomanX`, `mmceman` and its own `gamescan.irx` into the IOP before OSDSYS starts and controls `gamescan.irx` through shared IOP memory while OSDSYS is running, showing "Scanning..." until the list is ready. Errors are shown in the "Refresh list" label, and the next "Refresh list" falls back to the launcher. May break OSDSYS memory card or controller access
 - `games_return_path` — ELF to run after "Refresh list" or a failed game launch (e.g. `mc?:/BOOT/BOOT.ELF`). When not set, the launcher reopens OSDMenu (with the games submenu open) from the path it was started from, then tries `mc?:/BOOT/osdmenu.elf`, and only falls back to the original OSDSYS if both fail
+- `psx_device_usb`, `psx_device_mx4sio`, `psx_device_mmce` — enable scanning each device type for PS1 games (default: all disabled)
 
 To add a custom separator to the menu, add a `name_OSDSYS_ITEM_???` entry that starts with `$!`.  
 This will make the entry inactive, but still show it in the OSD without the `$!` prefix.

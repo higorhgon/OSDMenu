@@ -33,8 +33,8 @@ static struct OSDMenuInfo *menuInfo = NULL;
 #define OSD_MAGIC 0x39390000 // arbitrary number to identify added menu items
 
 #ifndef HOSD
-// Whether the games submenu currently replaces the custom menu entries
-static int gamesMenuActive = 0;
+// Games submenu currently replacing the custom menu entries, NULL when the regular entries are shown
+static GamesSubmenu *activeMenu = NULL;
 // Whether the games submenu only shows "Scanning..." (games_live_scan)
 static int liveScanActive = 0;
 #endif
@@ -42,10 +42,10 @@ static int liveScanActive = 0;
 // Number of custom entries currently shown after "Browser" and "System Configuration"
 static int customItemCount(void) {
 #ifndef HOSD
-  if (gamesMenuActive && liveScanActive)
+  if (activeMenu && liveScanActive)
     return 1; // "Scanning..."
-  if (gamesMenuActive)
-    return settings.gamesCount + 2; // games + "back" + "refresh"
+  if (activeMenu)
+    return activeMenu->count + 2; // games + "back" + "refresh"
 #endif
   return settings.menuItemCount;
 }
@@ -73,12 +73,12 @@ static void launchMenuItem(int idx, const char *suffix) {
 }
 
 #ifndef HOSD
-// Launches the games entry in the given launcher mode (":s" or ":g<N>").
+// Launches the submenu entry in the given launcher mode (":s" or ":g<N>").
 // The patcher path is appended after '|' so the launcher can return to OSDMenu afterwards
-static void launchGamesMode(const char *mode) {
+static void launchGamesMode(GamesSubmenu *menu, const char *mode) {
   char suffix[16 + sizeof(settings.bootPath)];
   snprintf(suffix, sizeof(suffix), "%s%s%s", mode, settings.bootPath[0] ? "|" : "", settings.bootPath);
-  launchMenuItem(settings.gamesItemIdx, suffix);
+  launchMenuItem(menu->itemIdx, suffix);
 }
 
 static uint32_t gamesMenuReturnEntry = 0;
@@ -95,26 +95,32 @@ static void setMenuEntry(int pos, int slot) {
   }
 }
 
-// Shows "< Back", the games and "Refresh list" as the custom entries.
+// Shows "< Back", the games and "Refresh list" of the submenu as the custom entries.
 // OSDSYS reads the entry table and cursor from menuInfo every frame, so this takes
 // effect immediately without leaving the OSD
-static void showGamesEntries(void) {
-  int base = settings.menuItemCount;
+static void showGamesEntries(GamesSubmenu *menu) {
   int pos = 0;
-  setMenuEntry(pos++, base + settings.gamesCount); // "< Back"
-  for (int i = 0; i < settings.gamesCount; i++)
-    setMenuEntry(pos++, base + i);
-  setMenuEntry(pos++, base + settings.gamesCount + 1); // "Refresh list"
+  setMenuEntry(pos++, menu->base + menu->count); // "< Back"
+  for (int i = 0; i < menu->count; i++)
+    setMenuEntry(pos++, menu->base + i);
+  setMenuEntry(pos++, menu->base + menu->count + 1); // "Refresh list"
 
   menuInfo->entryCount = 2 + pos;
   menuInfo->currentEntry = 3; // First game, or "Refresh list" when there are none
 }
 
-// Replaces the custom entries with the games submenu
-static void openGamesMenu(void) {
+// Replaces the custom entries with the submenu
+static void openGamesMenu(GamesSubmenu *menu) {
   gamesMenuReturnEntry = menuInfo->currentEntry;
-  showGamesEntries();
-  gamesMenuActive = 1;
+  showGamesEntries(menu);
+  activeMenu = menu;
+}
+
+// Writes the "< Back" and "Refresh list" labels after the games
+static void setGamesLabels(GamesSubmenu *menu, const char *refreshLabel) {
+  int base = menu->base + menu->count;
+  strcpy(settings.menuItemName[base], "< Back");
+  snprintf(settings.menuItemName[base + 1], NAME_LEN, "%s", refreshLabel);
 }
 
 #ifdef GAMES_MENU
@@ -131,13 +137,7 @@ static uint32_t liveScanAddr = 0; // LiveScanShared address in the EE's view of 
 static int liveScanDisabled = 0;  // Set after a failure, "Refresh list" then uses the launcher
 static int liveScanFrames = 0;
 static uint32_t liveScanHeartbeat = 0;
-
-// Writes the "< Back" and "Refresh list" labels after the games
-static void setGamesLabels(const char *refreshLabel) {
-  int base = settings.menuItemCount + settings.gamesCount;
-  strcpy(settings.menuItemName[base], "< Back");
-  snprintf(settings.menuItemName[base + 1], NAME_LEN, "%s", refreshLabel);
-}
+#define liveScanMenu (&settings.submenus[SUBMENU_GAMES]) // Only PS2 games are scanned live
 
 // IOP RAM is accessed with 32-bit uncached reads and writes only.
 // LIVESCAN_IOP_RAM is a kernel segment address, so like PS2SDK's smem_read()/smem_write(),
@@ -212,26 +212,23 @@ static uint32_t findLiveScan(void) {
 static void failLiveScan(const char *label) {
   liveScanActive = 0;
   liveScanDisabled = 1;
-  setGamesLabels(label);
-  showGamesEntries();
-  menuInfo->currentEntry = 2 + settings.gamesCount + 1; // Keep the cursor on "Refresh list"
+  setGamesLabels(liveScanMenu, label);
+  showGamesEntries(liveScanMenu);
+  menuInfo->currentEntry = 2 + liveScanMenu->count + 1; // Keep the cursor on "Refresh list"
 }
 
 // Returns 1 if gamescan.irx is in IOP RAM. Used right after loading it, before OSDSYS starts
 int liveScanProbe(void) { return findLiveScan() != 0; }
 
-// Starts a live scan and shows "Scanning..." until it's done.
-// Returns 0 if the live scan is not enabled, so the launcher scans instead
-static int startLiveScan(void) {
-  if (!settings.gamesLiveScan || liveScanDisabled || !settings.gamesUseMMCE)
+// Starts a live scan of the menu and shows "Scanning..." until it's done.
+// Returns 0 if the live scan is not enabled for it, so the launcher scans instead
+static int startLiveScan(GamesSubmenu *menu) {
+  if ((menu != liveScanMenu) || !settings.gamesLiveScan || liveScanDisabled || !settings.gamesUseMMCE)
     return 0;
 
-  // Keep room for the "< Back" and "Refresh list" labels
-  if ((settings.menuItemCount + 2) > CUSTOM_ITEMS)
-    return 0;
-  if (!settings.gamesCacheLoaded) {
-    settings.gamesCount = 0;
-    setGamesLabels("Refresh list");
+  if (!menu->cacheLoaded) {
+    menu->count = 0;
+    setGamesLabels(menu, "Refresh list");
   }
 
   if (!liveScanAddr)
@@ -265,7 +262,7 @@ static int startLiveScan(void) {
   liveScanActive = 1;
 
   // Show "Scanning..." as the only entry, using the "Refresh list" label slot
-  int slot = settings.menuItemCount + settings.gamesCount + 1;
+  int slot = menu->base + menu->count + 1;
   strcpy(settings.menuItemName[slot], "Scanning...");
   setMenuEntry(0, slot);
   menuInfo->entryCount = 3;
@@ -287,11 +284,11 @@ static void pollLiveScan(void) {
     return;
   }
 
+  GamesSubmenu *menu = liveScanMenu;
   int result = (int)iopRead(LIVESCAN_FIELD(result));
   int count = iopRead(LIVESCAN_FIELD(count));
-  int maxGames = CUSTOM_ITEMS - settings.menuItemCount - 2;
-  if (count > maxGames)
-    count = maxGames;
+  if (count > menu->max)
+    count = menu->max;
   if (count > LIVESCAN_MAX_GAMES)
     count = LIVESCAN_MAX_GAMES;
 
@@ -299,33 +296,42 @@ static void pollLiveScan(void) {
     // The cache the launcher reads wasn't updated, so the list can't be launched from
     char label[NAME_LEN];
     snprintf(label, sizeof(label), "Refresh list (live scan: write error %d)", result);
-    settings.gamesCount = 0;
+    menu->count = 0;
     failLiveScan(label);
     return;
   }
 
   for (int i = 0; i < count; i++)
-    iopReadString(LIVESCAN_FIELD(names) + i * LIVESCAN_NAME_LEN, settings.menuItemName[settings.menuItemCount + i], LIVESCAN_NAME_LEN);
-  settings.gamesCount = count;
-  settings.gamesCacheLoaded = 1;
+    iopReadString(LIVESCAN_FIELD(names) + i * LIVESCAN_NAME_LEN, settings.menuItemName[menu->base + i], LIVESCAN_NAME_LEN);
+  menu->count = count;
+  menu->cacheLoaded = 1;
 
   liveScanActive = 0;
-  setGamesLabels("Refresh list");
-  showGamesEntries();
+  setGamesLabels(menu, "Refresh list");
+  showGamesEntries(menu);
 }
 #endif
 
-// Opens the games submenu requested by GAMES_REOPEN_ARG once the menu is on screen,
-// with "Games >" as the entry "< Back" returns to
+// Returns the submenu shown by the menu item index, or NULL
+static GamesSubmenu *findSubmenu(int idx) {
+  for (int i = 0; i < SUBMENU_COUNT; i++)
+    if ((settings.submenus[i].itemIdx >= 0) && (settings.submenus[i].itemIdx == idx))
+      return &settings.submenus[i];
+  return NULL;
+}
+
+// Opens the submenu requested by GAMES_REOPEN_ARG/PSX_REOPEN_ARG once the menu is on screen,
+// with its "Games >"/"PSX >" entry as the entry "< Back" returns to
 static void reopenGamesMenu(void) {
-  settings.gamesReopen = 0;
-  if (!settings.gamesCacheLoaded || !menuInfo)
+  GamesSubmenu *menu = &settings.submenus[settings.reopenSubmenu - 1];
+  settings.reopenSubmenu = 0;
+  if ((menu->itemIdx < 0) || !menu->cacheLoaded || !menuInfo)
     return;
 
   for (int i = 0; i < settings.menuItemCount; i++) {
-    if (settings.menuItemIdx[i] == settings.gamesItemIdx) {
+    if (settings.menuItemIdx[i] == menu->itemIdx) {
       menuInfo->currentEntry = 2 + i;
-      openGamesMenu();
+      openGamesMenu(menu);
       return;
     }
   }
@@ -338,28 +344,29 @@ static void closeGamesMenu(void) {
 
   menuInfo->entryCount = 2 + settings.menuItemCount;
   menuInfo->currentEntry = gamesMenuReturnEntry;
-  gamesMenuActive = 0;
+  activeMenu = NULL;
 }
 
-// Handles X on an entry of the games submenu
+// Handles X on an entry of the active submenu
 static void handleGamesMenuEntry(int pos) {
+  GamesSubmenu *menu = activeMenu;
   if (pos == 0) {
     closeGamesMenu();
     return;
   }
 
-  if (pos == settings.gamesCount + 1) {
+  if (pos == menu->count + 1) {
 #ifdef GAMES_MENU
-    if (startLiveScan())
+    if (startLiveScan(menu))
       return;
 #endif
-    launchGamesMode(":s"); // Rescan
+    launchGamesMode(menu, ":s"); // Rescan
     return;
   }
 
   char mode[16];
   sprintf(mode, ":g%d", pos - 1);
-  launchGamesMode(mode);
+  launchGamesMode(menu, mode);
 }
 #endif
 
@@ -373,7 +380,7 @@ int handleMenuEntry(int selected) {
     return 0;
 
 #ifndef HOSD
-  if (gamesMenuActive) {
+  if (activeMenu) {
     if (liveScanActive)
       return 0; // "Scanning..." is not selectable
     if (pos < customItemCount())
@@ -391,20 +398,21 @@ int handleMenuEntry(int selected) {
   int idx = settings.menuItemIdx[pos];
 
 #ifndef HOSD
-  if (idx == settings.gamesItemIdx) {
-    if (settings.gamesCacheLoaded) {
-      openGamesMenu();
+  GamesSubmenu *menu = findSubmenu(idx);
+  if (menu) {
+    if (menu->cacheLoaded) {
+      openGamesMenu(menu);
       return 0;
     }
     // No cache yet: scan live if possible, else the launcher scans, writes it and returns to the OSD
 #ifdef GAMES_MENU
     gamesMenuReturnEntry = menuInfo->currentEntry;
-    gamesMenuActive = 1;
-    if (startLiveScan())
+    activeMenu = menu;
+    if (startLiveScan(menu))
       return 0;
-    gamesMenuActive = 0;
+    activeMenu = NULL;
 #endif
-    launchGamesMode(":s");
+    launchGamesMode(menu, ":s");
     return 0;
   }
 #endif
@@ -515,13 +523,13 @@ static int fontHeight = 16;
 // Draws selected items
 void drawMenuItemSelected(int X, int Y, uint32_t *color, int alpha, const char *string, int num) {
 #ifndef HOSD
-  if (settings.gamesReopen)
+  if (settings.reopenSubmenu)
     reopenGamesMenu();
 #endif
 #if !defined(HOSD) && defined(GAMES_MENU)
   if (liveScanActive && (num == 0))
     pollLiveScan();
-  else if (gamesMenuActive && (num == 0) && padBackPressed())
+  else if (activeMenu && (num == 0) && padBackPressed())
     closeGamesMenu();
 #endif
 #ifdef HOSD
@@ -569,13 +577,13 @@ void drawMenuItemSelected(int X, int Y, uint32_t *color, int alpha, const char *
 // Draws unselected items
 void drawMenuItemUnselected(int X, int Y, uint32_t *color, int alpha, const char *string, int num) {
 #ifndef HOSD
-  if (settings.gamesReopen)
+  if (settings.reopenSubmenu)
     reopenGamesMenu();
 #endif
 #if !defined(HOSD) && defined(GAMES_MENU)
   if (liveScanActive && (num == 0))
     pollLiveScan();
-  else if (gamesMenuActive && (num == 0) && padBackPressed())
+  else if (activeMenu && (num == 0) && padBackPressed())
     closeGamesMenu();
 #endif
 #ifdef HOSD

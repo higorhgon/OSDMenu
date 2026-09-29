@@ -139,8 +139,19 @@ the one before `:`, so ISOs with digits in their name (e.g. `Bloody Roar 3.iso`)
 from MMCE. This was fixed upstream after v1.8.0 (commit `cedc060`, "FIX MMCE"). Use the "Latest development build"
 or v1.7.0 instead.
 
-**Current limitations**: no cover art (the OSDSYS custom menu has no per-item icon), no PS1 support (DKWDRV has no
-direct ISO launch argument), and no network storage (SMB/FTP/SFTP), which Neutrino doesn't support.
+**Current limitations**: no cover art (the OSDSYS custom menu has no per-item icon) and no network storage
+(SMB/FTP/SFTP), which Neutrino doesn't support.
+
+#### PS1 games ("PSX >")
+The patcher's "PSX >" entry is passed as item index 9998 (`PSX_MENU_IDX`) and works the same way, with the
+`psx_device_usb`, `psx_device_mx4sio` and `psx_device_mmce` keys and the `mc?:/SYS-CONF/OSDPSX.CNF` cache.
+PS1 games are launched via [Ember](https://github.com/Gageformer/Ember), which is not bundled with OSDMenu.
+For each enabled device, the launcher lists the subfolders of `<device>:/EMBER/games/` that contain a `.cue` file,
+but only if `<device>:/EMBER/ember.elf` exists, since Ember loads games relative to its own folder:
+```
+<device>:/EMBER/ember.elf <game folder name>
+```
+Ember uses the storage drivers that are already loaded, so the launcher loads the device's drivers before starting it.
 
 ### Config handler
 When the launcher receives a path that ends with `.CNF`, `.cnf`, `.CFG` or `.cfg`,

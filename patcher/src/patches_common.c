@@ -67,7 +67,7 @@ void patchExecuteOSDSYS(void *epc, void *gp, int argc, char *argv[]) {
 
 #if !defined(HOSD) && defined(GAMES_MENU)
   // Read the controller to close the games submenu with Circle
-  if (settings.gamesItemIdx >= 0)
+  if ((settings.submenus[SUBMENU_GAMES].itemIdx >= 0) || (settings.submenus[SUBMENU_PSX].itemIdx >= 0))
     patchPadPortOpen((uint8_t *)epc);
 #endif
 

@@ -257,6 +257,18 @@ int handleOSDM(int argc, char *argv[]) {
         gamesCfg.neutrinoArgs = addStr(gamesCfg.neutrinoArgs, valuePtr);
       continue;
     }
+    if (!strncmp(lineBuffer, "psx_device_usb", 14)) {
+      gamesCfg.psxUseUSB = atoi(valuePtr);
+      continue;
+    }
+    if (!strncmp(lineBuffer, "psx_device_mx4sio", 17)) {
+      gamesCfg.psxUseMX4SIO = atoi(valuePtr);
+      continue;
+    }
+    if (!strncmp(lineBuffer, "psx_device_mmce", 15)) {
+      gamesCfg.psxUseMMCE = atoi(valuePtr);
+      continue;
+    }
 #endif
   }
   fclose(file);
@@ -265,8 +277,9 @@ int handleOSDM(int argc, char *argv[]) {
     deinitPFS();
 
 #ifdef LAUNCHER_GAMES_MENU
-  // The patcher's automatic "Games >" entry has no paths in OSDMENU.CNF
-  if (targetIdx == GAMES_MENU_IDX) {
+  // The patcher's automatic "Games >" and "PSX >" entries have no paths in OSDMENU.CNF
+  if ((targetIdx == GAMES_MENU_IDX) || (targetIdx == PSX_MENU_IDX)) {
+    gamesCfg.kind = (targetIdx == PSX_MENU_IDX) ? GamesKind_PSX : GamesKind_PS2;
     freeLinkedStr(targetPaths);
     freeLinkedStr(targetArgs);
     if (settings.dkwdrvPath)

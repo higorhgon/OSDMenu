@@ -38,10 +38,13 @@ int main(int argc, char *argv[]) {
   if ((argc > 0) && argv[0])
     strncpy(settings.bootPath, argv[0], sizeof(settings.bootPath) - 1);
 
-  // The launcher asks to reopen the games submenu after scanning or a failed launch.
+  // The launcher asks to reopen the games or PSX submenu after scanning or a failed launch.
   // Strip the argument so it doesn't reach OSDSYS
   if ((argc > 1) && !strcmp(argv[argc - 1], GAMES_REOPEN_ARG)) {
-    settings.gamesReopen = 1;
+    settings.reopenSubmenu = SUBMENU_GAMES + 1;
+    argc--;
+  } else if ((argc > 1) && !strcmp(argv[argc - 1], PSX_REOPEN_ARG)) {
+    settings.reopenSubmenu = SUBMENU_PSX + 1;
     argc--;
   }
 

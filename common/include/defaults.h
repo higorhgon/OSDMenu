@@ -25,8 +25,17 @@
 // OSDMENU.CNF item index the patcher uses for the automatic "Games >" entry
 #define GAMES_MENU_IDX 9999
 
-// Passed by the launcher to OSDMenu as the last argument to reopen the games submenu
+// PS1 games submenu ("PSX >"), launched via Ember: <device>:/EMBER/ember.elf, games in EMBER/games/<name>/
+#ifndef PSX_CACHE_PATH
+#define PSX_CACHE_PATH "mc0:/SYS-CONF/OSDPSX.CNF"
+#endif
+#define PSX_MENU_IDX 9998
+#define PSX_EMBER_FOLDER "EMBER"
+#define PSX_EMBER_ELF "ember.elf"
+
+// Passed by the launcher to OSDMenu as the last argument to reopen the games or PSX submenu
 #define GAMES_REOPEN_ARG "-games"
+#define PSX_REOPEN_ARG "-psx"
 
 // Last path the launcher tries to return to OSDMenu after scanning the games
 #ifndef GAMES_DEFAULT_RETURN_PATH

@@ -322,6 +322,79 @@ static int scanFolder(const char *mountpoint, const char *folder, GameMediaType 
   return 1;
 }
 
+// Returns 1 if dirPath contains a *.cue file
+static int hasCueFile(const char *dirPath) {
+  int dfd = fileXioDopen(dirPath);
+  if (dfd < 0)
+    return 0;
+
+  int found = 0;
+  iox_dirent_t dirent;
+  while (!found && (fileXioDread(dfd, &dirent) > 0)) {
+    if (FIO_S_ISDIR(dirent.stat.mode))
+      continue;
+    char *ext = strrchr(dirent.name, '.');
+    found = (ext && !strcasecmp(ext, ".cue"));
+  }
+  fileXioDclose(dfd);
+  return found;
+}
+
+// Scans <mountpoint>/EMBER/games for PS1 games: subfolders with a *.cue file inside.
+// The folder name is Ember's launch argument, and Ember looks for it relative to its
+// own folder, so games are only listed when <mountpoint>/EMBER/ember.elf exists.
+// Sets *emberFound, returns 1 if the games folder was opened.
+static int scanEmberFolder(const char *mountpoint, int *emberFound, int *entriesOut) {
+  *entriesOut = 0;
+
+  char path[GAMES_REL_PATH_LEN];
+  snprintf(path, sizeof(path), "%s/" PSX_EMBER_FOLDER "/" PSX_EMBER_ELF, mountpoint);
+  *emberFound = !tryFile(path);
+  if (!*emberFound)
+    return 0;
+
+  char gamesPath[GAMES_REL_PATH_LEN];
+  snprintf(gamesPath, sizeof(gamesPath), "%s/" PSX_EMBER_FOLDER "/games", mountpoint);
+  int dfd = fileXioDopen(gamesPath);
+  if (dfd < 0)
+    return 0;
+
+  iox_dirent_t dirent;
+  while (fileXioDread(dfd, &dirent) > 0) {
+    if (!FIO_S_ISDIR(dirent.stat.mode) || (dirent.name[0] == '.'))
+      continue;
+    (*entriesOut)++;
+
+    // A truncated folder name wouldn't launch
+    if (((strlen(gamesPath) + strlen(dirent.name) + 2) > GAMES_REL_PATH_LEN) || (strlen(dirent.name) >= GAMES_NAME_LEN))
+      continue;
+    snprintf(path, sizeof(path), "%s/%s", gamesPath, dirent.name);
+    if (!hasCueFile(path))
+      continue;
+
+    if (gameCount >= GAMES_MAX_ENTRIES) {
+      gameListTruncated = 1;
+      break;
+    }
+    GameEntry *g = &gameList[gameCount++];
+    snprintf(g->name, GAMES_NAME_LEN, "%s", dirent.name);
+    snprintf(g->path, GAMES_REL_PATH_LEN, "%s", path);
+    g->neutrinoDriver = NULL;
+    g->media = GameMedia_CD;
+    g->id[0] = '\0';
+  }
+  fileXioDclose(dfd);
+  return 1;
+}
+
+// Returns 1 if the device is enabled for the kind of games being scanned
+static int isDeviceEnabled(GamesConfig *cfg, DeviceType device) {
+  if (cfg->kind == GamesKind_PSX)
+    return ((device == Device_USB) && cfg->psxUseUSB) || ((device == Device_MX4SIO) && cfg->psxUseMX4SIO) ||
+           ((device == Device_MMCE) && cfg->psxUseMMCE);
+  return ((device == Device_USB) && cfg->useUSB) || ((device == Device_MX4SIO) && cfg->useMX4SIO) || ((device == Device_MMCE) && cfg->useMMCE);
+}
+
 static int gameEntryCompare(const void *a, const void *b) { return strcasecmp(((const GameEntry *)a)->name, ((const GameEntry *)b)->name); }
 
 // Probes and scans every enabled device/mountpoint combination
@@ -332,19 +405,8 @@ static void scanAllDevices(GamesConfig *cfg) {
 
   for (size_t i = 0; i < GAMES_DEVICE_COUNT; i++) {
     const GamesDeviceEntry *dev = &gamesDevices[i];
-
-#ifdef USB
-    if (dev->device == Device_USB && !cfg->useUSB)
+    if (!isDeviceEnabled(cfg, dev->device))
       continue;
-#endif
-#ifdef MX4SIO
-    if (dev->device == Device_MX4SIO && !cfg->useMX4SIO)
-      continue;
-#endif
-#ifdef MMCE
-    if (dev->device == Device_MMCE && !cfg->useMMCE)
-      continue;
-#endif
 
     for (int idx = 0; idx < dev->mountCount; idx++) {
       if (scanDiagCount >= GAMES_MAX_DIAG)
@@ -372,6 +434,11 @@ static void scanAllDevices(GamesConfig *cfg) {
       // The root probe above only gives BDM devices time to settle; still try
       // the folders when it fails, since not every driver necessarily accepts
       // O_DIRECTORY on a bare "<device>:" root (handleMMCE never probes it)
+      if (cfg->kind == GamesKind_PSX) {
+        // cdOpened: ember.elf found, dvdOpened: EMBER/games opened
+        diag->dvdOpened = scanEmberFolder(diag->mountpoint, &diag->cdOpened, &diag->dvdEntries);
+        continue;
+      }
       diag->cdOpened = scanFolder(diag->mountpoint, cfg->cdFolder, GameMedia_CD, dev->neutrinoDriver, &diag->cdEntries);
       diag->dvdOpened = scanFolder(diag->mountpoint, cfg->dvdFolder, GameMedia_DVD, dev->neutrinoDriver, &diag->dvdEntries);
     }
@@ -385,13 +452,18 @@ static void scanAllDevices(GamesConfig *cfg) {
 static void printScanDiagnostics(GamesConfig *cfg) {
   scr_printf(" Nenhum jogo encontrado. Diagnostico:\n");
   if (scanDiagCount == 0) {
-    scr_printf(" Nenhum dispositivo habilitado em games_device_*\n");
+    scr_printf(" Nenhum dispositivo habilitado em %s_device_*\n", (cfg->kind == GamesKind_PSX) ? "psx" : "games");
     return;
   }
   for (int i = 0; i < scanDiagCount; i++) {
     GamesScanDiag *d = &scanDiag[i];
     if (!d->available && !d->cdOpened && !d->dvdOpened) {
       scr_printf(" %s nao respondeu (dispositivo ausente/nao pronto)\n", d->mountpoint);
+      continue;
+    }
+    if (cfg->kind == GamesKind_PSX) {
+      scr_printf(" %s " PSX_EMBER_FOLDER "/" PSX_EMBER_ELF "=%s " PSX_EMBER_FOLDER "/games=%s(%d)\n", d->mountpoint, d->cdOpened ? "ok" : "n/a",
+                 d->dvdOpened ? "ok" : "n/a", d->dvdEntries);
       continue;
     }
     scr_printf(" %s %s=%s(%d) %s=%s(%d)\n", d->mountpoint, cfg->cdFolder, d->cdOpened ? "ok" : "n/a", d->cdEntries, cfg->dvdFolder,
@@ -601,6 +673,29 @@ static void launchGame(GamesConfig *cfg, const char *bsd, char *isoPath, const c
   launchGamesELF(argc, argv);
 }
 
+// Launches a PS1 game with Ember. gamePath is the game folder, <device>:/EMBER/games/<name>.
+// Ember takes the folder name as its only argument and finds it relative to argv[0],
+// using the storage drivers that are already loaded. Only returns on failure.
+static void launchEmber(const char *gamePath) {
+  const char *games = strstr(gamePath, "/games/");
+  if (!games) {
+    msg("PSX: invalid game path %s\n", gamePath);
+    return;
+  }
+
+  char elfPath[GAMES_REL_PATH_LEN];
+  char folder[GAMES_NAME_LEN];
+  snprintf(elfPath, sizeof(elfPath), "%.*s/" PSX_EMBER_ELF, (int)(games - gamePath), gamePath);
+  snprintf(folder, sizeof(folder), "%s", games + 7);
+
+  DeviceType mask = storageDevice(elfPath);
+  if (mask && initModules(mask))
+    return;
+
+  char *argv[] = {elfPath, folder};
+  launchGamesELF(2, argv);
+}
+
 // Launches the selected entry of the full-screen list. Only returns on failure.
 static void launchSelected(GamesConfig *cfg, int index) {
   GameEntry *g = &gameList[index];
@@ -608,24 +703,28 @@ static void launchSelected(GamesConfig *cfg, int index) {
   scr_setXY(0, GAMES_LIST_START_ROW + GAMES_VISIBLE_ROWS + 2);
   scr_printf(" Iniciando %s...\n", g->name);
 
-  launchGame(cfg, g->neutrinoDriver, g->path, g->id);
+  if (cfg->kind == GamesKind_PSX)
+    launchEmber(g->path);
+  else
+    launchGame(cfg, g->neutrinoDriver, g->path, g->id);
 
   scr_printf(" Falha ao iniciar %s\n", g->name);
   sleep(2);
 }
 
-// Returns GAMES_CACHE_PATH on the memory card OSDMENU.CNF was loaded from
-static void getGamesCachePath(char *path) {
-  strcpy(path, GAMES_CACHE_PATH);
+// Returns the cache path for cfg->kind on the memory card OSDMENU.CNF was loaded from
+static void getGamesCachePath(GamesConfig *cfg, char *path) {
+  strcpy(path, (cfg->kind == GamesKind_PSX) ? PSX_CACHE_PATH : GAMES_CACHE_PATH);
   path[2] = (settings.mcHint == 1) ? '1' : '0';
 }
 
-// Writes the scan result to GAMES_CACHE_PATH, which the patcher reads on boot
-// to show the games as an OSDSYS submenu. Each game is a "game" (display name)
-// line followed by its Neutrino "bsd" driver, "dvd" ISO path and optional "id" (title ID) lines.
-static int writeGamesCache(void) {
-  char path[sizeof(GAMES_CACHE_PATH)];
-  getGamesCachePath(path);
+// Writes the scan result to GAMES_CACHE_PATH or PSX_CACHE_PATH, which the patcher reads on boot
+// to show the games as an OSDSYS submenu. Each game is a "game" (display name) line followed by
+// its Neutrino "bsd" driver, "dvd" ISO path and optional "id" (title ID) lines for PS2 games,
+// or by its "psx" game folder line for PS1 games.
+static int writeGamesCache(GamesConfig *cfg) {
+  char path[32];
+  getGamesCachePath(cfg, path);
 
   int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC);
   if (fd < 0)
@@ -634,8 +733,12 @@ static int writeGamesCache(void) {
   char line[GAMES_NAME_LEN + GAMES_REL_PATH_LEN + 32];
   int res = 0;
   for (int i = 0; (i < gameCount) && !res; i++) {
-    int len = snprintf(line, sizeof(line), "game = %s\nbsd = %s\ndvd = %s\n%s%s%s", gameList[i].name, gameList[i].neutrinoDriver, gameList[i].path,
-                       gameList[i].id[0] ? "id = " : "", gameList[i].id, gameList[i].id[0] ? "\n" : "");
+    int len;
+    if (cfg->kind == GamesKind_PSX)
+      len = snprintf(line, sizeof(line), "game = %s\npsx = %s\n", gameList[i].name, gameList[i].path);
+    else
+      len = snprintf(line, sizeof(line), "game = %s\nbsd = %s\ndvd = %s\n%s%s%s", gameList[i].name, gameList[i].neutrinoDriver, gameList[i].path,
+                     gameList[i].id[0] ? "id = " : "", gameList[i].id, gameList[i].id[0] ? "\n" : "");
     if (len >= (int)sizeof(line))
       len = sizeof(line) - 1;
     if (write(fd, line, len) != len)
@@ -645,10 +748,10 @@ static int writeGamesCache(void) {
   return res;
 }
 
-// Launches game idx from GAMES_CACHE_PATH without scanning. Only returns on failure.
+// Launches game idx from the cache without scanning. Only returns on failure.
 static int launchCachedGame(GamesConfig *cfg, int idx) {
-  char path[sizeof(GAMES_CACHE_PATH)];
-  getGamesCachePath(path);
+  char path[32];
+  getGamesCachePath(cfg, path);
 
   FILE *file = fopen(path, "r");
   if (!file) {
@@ -681,9 +784,21 @@ static int launchCachedGame(GamesConfig *cfg, int idx) {
         strncpy(isoPath, value, sizeof(isoPath) - 1);
       else if (!strncmp(line, "id", 2))
         strncpy(id, value, sizeof(id) - 1);
+      else if (!strncmp(line, "psx", 3))
+        strncpy(isoPath, value, sizeof(isoPath) - 1); // PS1 game folder
     }
   }
   fclose(file);
+
+  if (cfg->kind == GamesKind_PSX) {
+    if (isoPath[0] == '\0') {
+      msg("PSX: game %d not found in %s, try refreshing the list\n", idx, path);
+      return -ENOENT;
+    }
+    launchEmber(isoPath);
+    msg("PSX: failed to launch %s\n", isoPath);
+    return -ENOENT;
+  }
 
   if ((bsd[0] == '\0') || (isoPath[0] == '\0')) {
     msg("Games: game %d not found in %s, try refreshing the list\n", idx, path);
@@ -799,6 +914,7 @@ static void returnToMenu(GamesConfig *cfg, const char *patcherPath) {
   if (patcherPath)
     strncpy(candidates[1], patcherPath, GAMES_REL_PATH_LEN - 1);
   strncpy(candidates[2], GAMES_DEFAULT_RETURN_PATH, GAMES_REL_PATH_LEN - 1);
+  char *reopenArg = (cfg->kind == GamesKind_PSX) ? PSX_REOPEN_ARG : GAMES_REOPEN_ARG;
   freeGamesConfig(cfg);
 
   for (int i = 0; i < 3; i++) {
@@ -811,8 +927,8 @@ static void returnToMenu(GamesConfig *cfg, const char *patcherPath) {
       continue;
 
     // Only returns if the file can't be launched.
-    // "-games" makes OSDMenu reopen the games submenu; not passed to games_return_path
-    char *argv[] = {candidates[i], GAMES_REOPEN_ARG};
+    // "-games"/"-psx" makes OSDMenu reopen the submenu; not passed to games_return_path
+    char *argv[] = {candidates[i], reopenArg};
     launchPath((i == 0) ? 1 : 2, argv);
   }
 
@@ -831,7 +947,7 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
   const char *mode = strrchr(arg, ':');
   char modeType = (mode && ((mode[1] == 'g') || (mode[1] == 's'))) ? mode[1] : '\0';
 
-  if ((modeType != 's') && !cfg->neutrinoPath && !(cfg->useOPL && cfg->oplPath)) {
+  if ((cfg->kind == GamesKind_PS2) && (modeType != 's') && !cfg->neutrinoPath && !(cfg->useOPL && cfg->oplPath)) {
     msg("Games: games_neutrino_path is not set in OSDMENU.CNF\n");
     sleep(3);
     if (modeType)
@@ -856,21 +972,12 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
   // storage drivers and padman entirely. Basic modules are always reloaded
   // on every IOP reset anyway. padman is only needed for the full-screen list.
   DeviceType scanMask = (modeType == 's') ? Device_None : Device_Games;
-#ifdef USB
-  if (cfg->useUSB)
-    scanMask |= Device_USB;
-#endif
-#ifdef MX4SIO
-  if (cfg->useMX4SIO)
-    scanMask |= Device_MX4SIO;
-#endif
-#ifdef MMCE
-  if (cfg->useMMCE)
-    scanMask |= Device_MMCE;
-#endif
+  for (size_t i = 0; i < GAMES_DEVICE_COUNT; i++)
+    if (isDeviceEnabled(cfg, gamesDevices[i].device))
+      scanMask |= gamesDevices[i].device;
 
   if (modeType == 's')
-    msg("Scanning for games...\n");
+    msg((cfg->kind == GamesKind_PSX) ? "Scanning for PS1 games...\n" : "Scanning for games...\n");
 
   int res = initModules(scanMask);
   if (res) {
@@ -890,7 +997,7 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
   if (modeType == 's') {
     // Write the cache even when empty, so the submenu opens with just
     // "< Back"/"Refresh list" instead of rescanning on every open
-    res = writeGamesCache();
+    res = writeGamesCache(cfg);
     if (res < 0)
       msg("Games: failed to write the games list: %d\n", res);
     else
@@ -907,7 +1014,10 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
   }
 
   if (gameCount == 0) {
-    msg("Games: No games found in %s/%s folders\n", cfg->cdFolder, cfg->dvdFolder);
+    if (cfg->kind == GamesKind_PSX)
+      msg("PSX: No games found in " PSX_EMBER_FOLDER "/games\n");
+    else
+      msg("Games: No games found in %s/%s folders\n", cfg->cdFolder, cfg->dvdFolder);
     printScanDiagnostics(cfg);
     sleep(15); // Long enough to read/photograph before returning to the clock
     freeGamesConfig(cfg);
