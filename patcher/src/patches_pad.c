@@ -21,11 +21,17 @@ static uint16_t prevButtons = 0;
 
 static int (*scePadRead)(int port, int slot, unsigned char *rdata) = NULL;
 static int hideTriangle = 0;
-uint32_t padReadAddr = 0; // For games_button_debug
+// For games_button_debug and the games_live_scan = 2 boot report
+uint32_t padReadAddr = 0;
+uint32_t padPortOpenAddr = 0;
+uint32_t padDmaStrAddr = 0;
+int padReadRedirects = 0;
+volatile uint32_t padReadCalls = 0;
 
 // Buttons are in bytes 2 and 3 of the data (active low), Triangle is bit 4 of byte 3
 static int hookPadRead(int port, int slot, unsigned char *rdata) {
   int ret = scePadRead(port, slot, rdata);
+  padReadCalls++;
   if (hideTriangle && (ret >= 4) && (((uint32_t)rdata & 0x1fffffff) >= 0x100000) && (((uint32_t)rdata & 0x1fffffff) < 0x2000000))
     rdata[3] |= (PADB_TRIANGLE >> 8);
   return ret;
@@ -33,16 +39,21 @@ static int hookPadRead(int port, int slot, unsigned char *rdata) {
 
 void padHideTriangle(int hide) { hideTriangle = hide; }
 
-// Redirects all J/JAL calls to func and function pointers to it to hook
-static void redirectCalls(uint8_t *osd, uint32_t func, void *hook) {
+// Redirects all J/JAL calls to func and function pointers to it to hook. Returns the number of redirects
+static int redirectCalls(uint8_t *osd, uint32_t func, void *hook) {
   uint32_t call = 0x08000000 | ((func >> 2) & 0x03ffffff);
   uint32_t hookTarget = ((uint32_t)hook >> 2) & 0x03ffffff;
+  int count = 0;
   for (uint32_t *p = (uint32_t *)osd; p < (uint32_t *)(osd + 0x100000); p++) {
-    if ((*p & 0xfbffffff) == call)
+    if ((*p & 0xfbffffff) == call) {
       *p = (*p & 0xfc000000) | hookTarget;
-    else if (*p == func)
+      count++;
+    } else if (*p == func) {
       *p = (uint32_t)hook;
+      count++;
+    }
   }
+  return count;
 }
 
 // Returns the J/JAL target of insn, or 0
@@ -80,6 +91,7 @@ static uint32_t findPadRead(uint32_t portOpen) {
   }
   if (best < 3)
     return 0;
+  padDmaStrAddr = dmaStr;
 
   // Functions start with "addiu sp, sp, -N"
   for (uint32_t *p = start; p < end; p++) {
@@ -143,11 +155,12 @@ void patchPadPortOpen(uint8_t *osd) {
     posButtons = 10;
   }
   scePadPortOpen = (void *)func;
+  padPortOpenAddr = (uint32_t)func;
   redirectCalls(osd, (uint32_t)func, hookPadPortOpen);
 
   if ((padReadAddr = findPadRead((uint32_t)func))) {
     scePadRead = (void *)padReadAddr;
-    redirectCalls(osd, padReadAddr, hookPadRead);
+    padReadRedirects = redirectCalls(osd, padReadAddr, hookPadRead);
   }
 
   // Circle confirms on Japanese consoles, so Cross goes back there

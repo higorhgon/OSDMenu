@@ -26,7 +26,12 @@ uint16_t padBackButtons(void);
 // Hides Triangle from OSDSYS, which would open the Version screen, while hide is set
 void padHideTriangle(int hide);
 
-// Address of the hooked scePadRead(), 0 if it wasn't found (shown by games_button_debug)
+// Addresses of the libpad functions found, 0 if not found, the number of calls to scePadRead() that were
+// redirected and the number of calls to the hook (shown by games_button_debug and the games_live_scan = 2 boot report)
 extern uint32_t padReadAddr;
+extern uint32_t padPortOpenAddr;
+extern uint32_t padDmaStrAddr;
+extern int padReadRedirects;
+extern volatile uint32_t padReadCalls;
 
 #endif

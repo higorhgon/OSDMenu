@@ -1,10 +1,9 @@
-// Diagnostics for the experimental live games scan (games_live_scan = 2).
-// OSDSYS resets the IOP when it starts, removing the modules the patcher loads.
-// To load them again from within OSDSYS, the patcher needs OSDSYS's own module
-// loading and IOP reboot functions. This writes a report with every "rom0:" module
-// path in OSDSYS, the code that references it and the functions called right after,
-// so these functions can be identified without the OSDSYS binary.
+// Diagnostics written on boot with games_live_scan = 2 to mc?:/SYS-CONF/OSDMLIVE.LOG.
+// The "rom0:" module loading report that found OSDSYS's module loader is no longer needed,
+// so the report now has the libpad code that follows scePadPortOpen(), to check how the patcher
+// finds scePadRead() (used to hide Triangle from OSDSYS in the submenus) without the OSDSYS binary.
 #include "settings.h"
+#include "patches_pad.h"
 #include <kernel.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -13,9 +12,8 @@
 #define NEWLIB_PORT_AWARE
 #include <fileio.h>
 
-#define DIAG_MAX_STRINGS 48
-#define DIAG_MAX_TARGETS 24
 #define DIAG_SCAN_SIZE 0x100000
+#define DIAG_LIBPAD_SIZE 0x800 // Same range the patcher searches
 
 static char report[24 * 1024];
 static int reportLen = 0;
@@ -34,54 +32,6 @@ static void out(const char *fmt, ...) {
   va_end(args);
 }
 
-static uint32_t targets[DIAG_MAX_TARGETS];
-static int targetCount = 0;
-
-static void addTarget(uint32_t target) {
-  for (int i = 0; i < targetCount; i++)
-    if (targets[i] == target)
-      return;
-  if (targetCount < DIAG_MAX_TARGETS)
-    targets[targetCount++] = target;
-}
-
-// Logs the code that loads the address of the string at strAddr and the calls that follow
-static void findReferences(uint8_t *osd, uint32_t strAddr) {
-  uint32_t hi = ((strAddr + 0x8000) >> 16) & 0xffff;
-  uint32_t lo = strAddr & 0xffff;
-  uint32_t *code = (uint32_t *)osd;
-  int refs = 0;
-
-  for (uint32_t i = 0; (i < DIAG_SCAN_SIZE / 4) && (refs < 4); i++) {
-    uint32_t insn = code[i];
-    if (((insn >> 26) != 0x0f) || ((insn & 0xffff) != hi)) // lui rt, hi
-      continue;
-    uint32_t reg = (insn >> 16) & 0x1f;
-
-    // addiu/ori reg, reg, lo within the next 8 instructions
-    for (uint32_t j = i + 1; (j < i + 9) && (j < DIAG_SCAN_SIZE / 4); j++) {
-      uint32_t lo_insn = code[j];
-      uint32_t op = lo_insn >> 26;
-      if (((op == 0x09) || (op == 0x0d)) && (((lo_insn >> 21) & 0x1f) == reg) && ((lo_insn & 0xffff) == lo)) {
-        refs++;
-        out("    ref at %08x:", (uint32_t)&code[i]);
-        // Calls within the next 16 instructions
-        for (uint32_t k = j; (k < j + 16) && (k < DIAG_SCAN_SIZE / 4); k++) {
-          if ((code[k] >> 26) == 0x03) { // jal
-            uint32_t target = ((code[k] & 0x03ffffff) << 2) | ((uint32_t)&code[k] & 0xf0000000);
-            out(" jal %08x@+%d", target, (int)(k - i));
-            addTarget(target);
-          }
-        }
-        out("\n");
-        break;
-      }
-    }
-  }
-  if (!refs)
-    out("    no references\n");
-}
-
 // Returns the report written on boot, followed by what was appended with liveScanReportAppendV(),
 // which is sent as the games_live_scan = 2 log
 const char *liveScanBootReport(int *length) {
@@ -94,39 +44,52 @@ void liveScanReportClear(void) { reportLen = 0; }
 
 void writeLiveScanDiagnostics(uint8_t *osd) {
   reportLen = 0;
-  targetCount = 0;
   out("OSDMenu live scan diagnostics\nROMVER %s\nOSDSYS at %08x\nlive scan boot %d\n\n", settings.romver, (uint32_t)osd, settings.liveScanBoot);
 
-  int strings = 0;
-  for (uint32_t i = 0; (i < DIAG_SCAN_SIZE - 5) && (strings < DIAG_MAX_STRINGS); i++) {
-    if (memcmp(&osd[i], "rom0:", 5))
-      continue;
-    char str[49];
-    int len = 0;
-    while ((len < 48) && (osd[i + len] >= 0x20) && (osd[i + len] < 0x7f)) {
-      str[len] = osd[i + len];
-      len++;
-    }
-    str[len] = '\0';
-    out("%08x \"%s\"%s\n", (uint32_t)&osd[i], str, ((i > 0) && osd[i - 1]) ? " (inside a string)" : "");
-    findReferences(osd, (uint32_t)&osd[i]);
-    strings++;
-    i += len;
+  // What the patcher found (see patches_pad.c)
+  uint32_t start = padPortOpenAddr;
+  out("libpad: scePadPortOpen %08x, scePadGetDmaStr %08x, scePadRead %08x (%d calls redirected)\n", padPortOpenAddr, padDmaStrAddr,
+      padReadAddr, padReadRedirects);
+  if (!start || (start < (uint32_t)osd) || (start + DIAG_LIBPAD_SIZE > (uint32_t)osd + DIAG_SCAN_SIZE)) {
+    out("scePadPortOpen not found\n");
+    goto write;
   }
 
-  out("\nCalled functions:\n");
-  for (int i = 0; i < targetCount; i++) {
-    out("%08x:", targets[i]);
-    uint32_t *fn = (uint32_t *)targets[i];
-    if (((uint32_t)fn < (uint32_t)osd) || ((uint32_t)fn >= (uint32_t)osd + DIAG_SCAN_SIZE - 64)) {
-      out(" outside OSDSYS\n");
+  // OSDSYS calls into the libpad range, by target (calls already redirected to the hooks aren't counted)
+  // The patcher's own memory is limited, so the counters use the scratch area loadConfig() uses
+  uint32_t *calls = (uint32_t *)0x1000000;
+  uint32_t *firstCaller = calls + DIAG_LIBPAD_SIZE / 4;
+  memset(calls, 0, DIAG_LIBPAD_SIZE);
+  for (uint32_t *p = (uint32_t *)osd; p < (uint32_t *)(osd + DIAG_SCAN_SIZE); p++) {
+    uint32_t target;
+    if ((*p & 0xfc000000) == 0x0c000000)
+      target = ((uint32_t)p & 0xf0000000) | ((*p & 0x03ffffff) << 2);
+    else
+      target = *p; // Function pointer
+    if ((target < start) || (target >= start + DIAG_LIBPAD_SIZE) || (target & 3))
       continue;
-    }
-    for (int w = 0; w < 16; w++)
-      out(" %08x", fn[w]);
+    int i = (target - start) / 4;
+    if (!calls[i]++)
+      firstCaller[i] = (uint32_t)p;
+  }
+  out("\nCalls into the libpad range (target: calls, first caller):\n");
+  for (int i = 0; i < DIAG_LIBPAD_SIZE / 4; i++)
+    if (calls[i])
+      out("  %08x: %lu, %08lx%s\n", start + i * 4, calls[i], firstCaller[i],
+          ((firstCaller[i] >= start) && (firstCaller[i] < start + DIAG_LIBPAD_SIZE)) ? " (inside)" : "");
+
+  memset(calls, 0, DIAG_LIBPAD_SIZE * 2);
+
+  // The libpad code itself
+  out("\nlibpad code:\n");
+  for (uint32_t addr = start; addr < start + DIAG_LIBPAD_SIZE; addr += 32) {
+    out("%08x:", addr);
+    for (int w = 0; w < 8; w++)
+      out(" %08x", ((uint32_t *)addr)[w]);
     out("\n");
   }
 
+write:;
   char path[] = "mc0:/SYS-CONF/OSDMLIVE.LOG";
   if (settings.mcSlot == 1)
     path[2] = '1';

@@ -1701,9 +1701,9 @@ void drawNonselectableEntryRight(int X, int Y, uint32_t *color, int alpha, const
     if (showSubmenuPrompts()) {
       if (settings.buttonDebug) {
         // "e<Enter> v<Version> b<Back> s<Sort> seen:<types seen in other panels>", on its own line above the prompts
-        char debug[64];
-        int len = snprintf(debug, sizeof(debug), "e%d v%d b%d s%d r%lx seen:", enterIconType, versionIconType, backIconType, sortIconType,
-                           padReadAddr);
+        char debug[80];
+        int len = snprintf(debug, sizeof(debug), "e%d v%d b%d s%d r%lx/%d n%lu seen:", enterIconType, versionIconType, backIconType,
+                           sortIconType, padReadAddr, padReadRedirects, padReadCalls % 10000);
         for (int i = 0; (i < seenIconCount) && (len < (int)sizeof(debug) - 4); i++)
           len += snprintf(&debug[len], sizeof(debug) - len, "%s%d", i ? "," : "", seenIconTypes[i]);
         DrawNonSelectableItem(settings.enterX, settings.versionY - 18, color, alpha, debug);
