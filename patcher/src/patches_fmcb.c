@@ -314,30 +314,63 @@ static void failLiveScan(const char *label) {
 
 // Returns the EE address of the export table of the IOP library name (up to 8 characters), or 0 if
 // it's not loaded, by looking for the table (magic 0x41e00000, version at +8, name at +12) in IOP RAM
+// Returns 1 if value looks like the address of an IOP function: in IOP RAM (with or without the kseg0 bit) or in ROM.
+// Import tables have the same header as export tables, but hold jr/j instructions instead
+static int isIopFunctionAddress(uint32_t value) {
+  if (!value || (value & 3))
+    return 0;
+  if ((value & 0x7fffffff) < LIVESCAN_IOP_RAM_SIZE)
+    return 1;
+  return (value & 0xfff00000) == 0xbfc00000;
+}
+
+// Returns 1 if the IOP RAM at addr (EE address) holds an export table: magic 0x41e00000,
+// a printable name at +12 and function addresses from +20 (export 4 at +36 is always a function)
+static int isExportTable(volatile uint32_t *w) {
+  if (w[0] != 0x41e00000)
+    return 0;
+  for (int i = 0; i < 8; i++) {
+    char c = ((volatile char *)&w[3])[i];
+    if (!c)
+      break;
+    if ((c < 0x20) || (c > 0x7e))
+      return 0;
+  }
+  return isIopFunctionAddress(w[5]) && isIopFunctionAddress(w[9]);
+}
+
+// Calls found(address, userdata) for every export table in IOP RAM until it returns non-zero,
+// and returns the address it stopped at, or 0
+static uint32_t iopForEachExportTable(int (*found)(uint32_t addr, void *userdata), void *userdata) {
+  const uint32_t chunk = 0x10000; // Interrupts are re-enabled between chunks
+  for (uint32_t start = LIVESCAN_IOP_RAM; start < LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - 64; start += chunk) {
+    uint32_t end = start + chunk;
+    if (end > LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - 64)
+      end = LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - 64;
+
+    for (uint32_t addr = start; addr < end; addr += 4) {
+      DI();
+      ee_kmode_enter();
+      int isTable = isExportTable((volatile uint32_t *)addr);
+      ee_kmode_exit();
+      EI();
+      if (isTable && found(addr, userdata))
+        return addr;
+    }
+  }
+  return 0;
+}
+
+static int matchExportName(uint32_t addr, void *userdata) {
+  uint32_t *nameWords = userdata;
+  return (iopRead(addr + 12) == nameWords[0]) && (iopRead(addr + 16) == nameWords[1]);
+}
+
+// Returns the EE address of the export table of the IOP library name (up to 8 characters), or 0 if it's not loaded
 static uint32_t iopFindExportTable(const char *name) {
   uint32_t nameWords[2] = {0, 0};
   memcpy(nameWords, name, (strlen(name) < 8) ? strlen(name) : 8);
-
-  const uint32_t chunk = 0x10000; // Interrupts are re-enabled between chunks
-  uint32_t found = 0;
-  for (uint32_t start = LIVESCAN_IOP_RAM; !found && (start < LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - 32); start += chunk) {
-    uint32_t end = start + chunk;
-    if (end > LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - 32)
-      end = LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - 32;
-
-    DI();
-    ee_kmode_enter();
-    for (uint32_t addr = start; addr < end; addr += 4) {
-      volatile uint32_t *w = (volatile uint32_t *)addr;
-      if ((w[0] == 0x41e00000) && (w[3] == nameWords[0]) && (w[4] == nameWords[1])) {
-        found = addr;
-        break;
-      }
-    }
-    ee_kmode_exit();
-    EI();
-  }
-  return found;
+  return iopForEachExportTable(matchExportName, nameWords);
 }
 
 // Returns the version of the IOP library name, or -1 if it's not loaded
@@ -428,6 +461,17 @@ static void diagLine(GamesSubmenu *menu, const char *fmt, ...) {
   }
 }
 
+static int logExportTable(uint32_t addr, void *userdata) {
+  char name[9] = {0};
+  uint32_t words[2] = {iopRead(addr + 12), iopRead(addr + 16)};
+  memcpy(name, words, 8);
+  int count = 4;
+  while ((count < 256) && iopRead(addr + 20 + count * 4))
+    count++;
+  logPrintf("  %-8s v%04lx @%05lx exports %d\n", name, iopRead(addr + 8) & 0xffff, addr - LIVESCAN_IOP_RAM, count);
+  return 0; // Keep going
+}
+
 // Lists the library versions, the number of exports of the thread libraries and the IOP modules
 // OSDSYS loaded (name, text start and size) in the log and the Games submenu entries
 static int showIopDiagnostics(GamesSubmenu *menu) {
@@ -441,12 +485,15 @@ static int showIopDiagnostics(GamesSubmenu *menu) {
            sio2 ? (sio2 - LIVESCAN_IOP_RAM) : 0, iopLibraryVersion("padman"), iopLibraryVersion("mcman"), iopLibraryVersion("iomanx"),
            settings.liveScanLoader);
 
-  // Number of exports of the thread libraries: thbase needs 48 for GetThreadmanIdList() (export 47)
+  // Number of exports of the thread libraries, counted up to the NULL that ends the table
+  // (export 3 can be NULL too): thbase needs 48 for GetThreadmanIdList() (export 47)
   int exportCounts[3] = {0, 0, 0};
   for (int lib = 0; lib < 3; lib++) {
     uint32_t table = iopDiagLibTables[(lib == 0) ? 2 : (lib - 1)]; // thbase, thsemap, thevent
-    while (table && (exportCounts[lib] < 128) && iopRead(table + 20 + exportCounts[lib] * 4))
-      exportCounts[lib]++;
+    int count = 4;
+    while (table && (count < 128) && iopRead(table + 20 + count * 4))
+      count++;
+    exportCounts[lib] = table ? count : -1;
   }
 
   // GetLoadcoreInternalData() (loadcore export 3) returns the address of loadcore's internal data,
@@ -468,7 +515,27 @@ static int showIopDiagnostics(GamesSubmenu *menu) {
   }
   diagLine(menu, "thbase %d thsemap %d thevent %d lc %lx", exportCounts[0], exportCounts[1], exportCounts[2], internals);
 
+  // Every export table in IOP RAM: the registered libraries
+  logPrintf("\nExport tables:\n");
+  iopForEachExportTable(logExportTable, NULL);
+
+  // sio2man's transfer lock (23, 24), transfer (25) and unlock (26) exports and their code
+  if (sio2) {
+    logPrintf("\nsio2man exports 4-%d:", 30);
+    for (int e = 4; e < 31; e++)
+      logPrintf("%s%lx", (e % 8) ? " " : "\n  ", iopRead(sio2 + 20 + e * 4));
+    logPrintf("\n");
+    for (int e = 23; e <= 26; e++) {
+      uint32_t func = iopRead(sio2 + 20 + e * 4);
+      logPrintf("sio2man export %d at %lx:", e, func);
+      for (int w = 0; func && (w < 32); w++)
+        logPrintf("%s%08lx", (w % 8) ? " " : "\n  ", iopReadCode(func + w * 4));
+      logPrintf("\n");
+    }
+  }
+
   // Loaded IOP modules: name, text start and size
+  logPrintf("\nModules:\n");
   uint32_t module = internals ? (iopReadCode(internals + 16) & 0x1fffff) : 0;
   for (int n = 0; module && (module < LIVESCAN_IOP_RAM_SIZE) && (n < 64); n++) {
     char name[17] = {0};
