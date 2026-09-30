@@ -89,6 +89,9 @@ const char *liveScanBootReport(int *length) {
   return report;
 }
 
+// Empties the report, for the log written after a scan
+void liveScanReportClear(void) { reportLen = 0; }
+
 void writeLiveScanDiagnostics(uint8_t *osd) {
   reportLen = 0;
   targetCount = 0;

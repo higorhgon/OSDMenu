@@ -5,6 +5,11 @@
 // MMCE devices when requested and writes GAMES_CACHE_PATH in the same format
 // as the launcher's games handler, so launching games keeps working unchanged.
 // Also writes the diagnostics logs the patcher sends (games_live_scan = 2).
+//
+// OSDSYS's rom0:SIO2MAN is the older sio2man 1.2, where every SIO2 transfer goes through
+// sio2man's thread, while mmceman drives the SIO2 directly (swapping sio2man's interrupt handler).
+// So while mmceman runs, the threads of the modules that use the SIO2 are suspended,
+// and mmceman is read into IOP RAM before, since the memory card can't be read without them.
 #include "irx_imports.h"
 #include "livescan.h"
 #include <iox_stat.h>
@@ -19,6 +24,9 @@ static LiveScanShared shared __attribute__((aligned(64)));
 static char gamePaths[LIVESCAN_MAX_GAMES][GAME_PATH_LEN];
 static char gameIDs[LIVESCAN_MAX_GAMES][GAME_ID_LEN];
 static unsigned int gameCount;
+
+static void *mmceBuffer = NULL; // mmceman read from the memory card, until it's loaded
+static int mmceSize = 0;
 
 static iox_dirent_t dirent __attribute__((aligned(64)));
 static iox_dirent_t subDirent __attribute__((aligned(64)));
@@ -277,10 +285,212 @@ static int writeCache(void) {
   return res;
 }
 
+//
+// SIO2 threads
+//
+// Threads are found by scanning IOP RAM for the thread control block tag (0x7f01 in the first halfword,
+// the ID in the second), turning each address into a thread ID the same way threadman does
+// and checking it with ReferThreadStatus(). Only threads whose entry point is in the code of a module
+// that uses the SIO2 are suspended, so a false match can't be suspended.
+#define TAG_THREAD 0x7f01
+#define THREAD_HANDLE(addr, id) ((int)(((addr) << 5) | (((id) & 0x3f) << 1) | 1))
+
+// Name prefixes of the modules whose threads use the SIO2: controller, memory card, multitap and remote
+static const char *sio2Modules[] = {"pad", "xpad", "mc", "xmc", "multitap", "mtap", "xmtap", "rmman", "dbcman"};
+#define SIO2_MODULES (sizeof(sio2Modules) / sizeof(sio2Modules[0]))
+
+#define MAX_SIO2_RANGES 16
+static unsigned int sio2Start[MAX_SIO2_RANGES], sio2End[MAX_SIO2_RANGES];
+static int sio2Ranges;
+
+static int pausedHandles[LIVESCAN_MAX_THREADS];
+static volatile int pausedCount = 0;
+static volatile unsigned int pausedTicks = 0;
+
+// Finds the code of the loaded modules that use the SIO2
+static void findSIO2Modules(void) {
+  sio2Ranges = 0;
+  lc_internals_t *lc = GetLoadcoreInternalData();
+  ModuleInfo_t *module = lc ? lc->image_info : NULL;
+  for (int n = 0; module && (n < 128) && (sio2Ranges < MAX_SIO2_RANGES); n++, module = module->next) {
+    if (!module->name)
+      continue;
+    for (unsigned int i = 0; i < SIO2_MODULES; i++) {
+      if (!strncmp(module->name, sio2Modules[i], strlen(sio2Modules[i]))) {
+        sio2Start[sio2Ranges] = module->text_start & 0x1fffff;
+        sio2End[sio2Ranges] = sio2Start[sio2Ranges] + module->text_size;
+        sio2Ranges++;
+        break;
+      }
+    }
+  }
+}
+
+static int isSIO2Code(unsigned int addr) {
+  addr &= 0x1fffff;
+  for (int i = 0; i < sio2Ranges; i++)
+    if ((addr >= sio2Start[i]) && (addr < sio2End[i]))
+      return 1;
+  return 0;
+}
+
+// Lists the threads in shared.threads, suspending the SIO2 ones if suspend is set
+static void listThreads(int suspend) {
+  iop_thread_info_t info;
+  findSIO2Modules();
+  shared.threadCount = 0;
+  shared.tagCount = 0;
+
+  for (unsigned int addr = 0x800; addr < LIVESCAN_IOP_RAM_SIZE; addr += 4) {
+    // Thread IDs stored here could look like a tag
+    if (((addr >= (unsigned int)&shared) && (addr < (unsigned int)&shared + sizeof(shared))) ||
+        ((addr >= (unsigned int)pausedHandles) && (addr < (unsigned int)pausedHandles + sizeof(pausedHandles))))
+      continue;
+    unsigned int word = *(volatile unsigned int *)addr;
+    if ((word & 0xffff) != TAG_THREAD)
+      continue;
+    shared.tagCount++;
+
+    int handle = THREAD_HANDLE(addr, word >> 16);
+    memset(&info, 0, sizeof(info));
+    if (ReferThreadStatus(handle, &info) != 0)
+      continue;
+    // Skip anything that doesn't look like a thread
+    unsigned int status = info.status;
+    if (((status != THS_RUN) && (status != THS_READY) && (status != THS_WAIT) && (status != THS_SUSPEND) && (status != THS_WAITSUSPEND) &&
+         (status != THS_DORMANT)) ||
+        (info.initPriority < 1) || (info.initPriority > 127) || (((unsigned int)info.entry & 0x1fffff) < 0x800))
+      continue;
+
+    int duplicate = 0;
+    for (unsigned int i = 0; i < shared.threadCount; i++)
+      if (shared.threads[i].handle == handle)
+        duplicate = 1;
+    if (duplicate || (shared.threadCount >= LIVESCAN_MAX_THREADS))
+      continue;
+
+    LiveScanThread *thread = &shared.threads[shared.threadCount++];
+    thread->handle = handle;
+    thread->entry = (unsigned int)info.entry;
+    thread->status = status;
+    thread->priority = info.currentPriority;
+    thread->sio2 = isSIO2Code(thread->entry);
+    thread->suspended = 1;
+
+    // Running, ready or waiting threads are suspended. The current thread is never in a SIO2 module
+    if (suspend && thread->sio2 && ((status == THS_READY) || (status == THS_WAIT) || (status == THS_RUN))) {
+      thread->suspended = SuspendThread(handle);
+      if (!thread->suspended)
+        pausedHandles[pausedCount++] = handle;
+    }
+  }
+}
+
+static void resumeThreads(void) {
+  int count = pausedCount;
+  pausedCount = 0;
+  for (int i = 0; i < count; i++)
+    ResumeThread(pausedHandles[i]);
+}
+
+// Resumes the SIO2 threads if the scan takes more than 20 seconds, so a stuck scan doesn't leave
+// the controller and the memory cards stopped
+static void watchdogThread(void *arg) {
+  while (1) {
+    DelayThread(500 * 1000);
+    if (!pausedCount) {
+      pausedTicks = 0;
+      continue;
+    }
+    if (++pausedTicks >= 40) {
+      shared.watchdogResumed = 1;
+      resumeThreads();
+    }
+  }
+}
+
+//
+// mmceman
+//
+
+// Reads mmceman from the memory card into IOP RAM
+static int readMMCE(void) {
+  if (mmceBuffer)
+    return 0;
+
+  int fd = iomanX_open(shared.mmcePath, FIO_O_RDONLY);
+  if (fd < 0)
+    return LIVESCAN_ERR_MMCE_READ + fd;
+
+  int res = 0;
+  int size = iomanX_lseek(fd, 0, FIO_SEEK_END);
+  if ((size <= 0) || (size > 256 * 1024) || (iomanX_lseek(fd, 0, FIO_SEEK_SET) != 0)) {
+    res = LIVESCAN_ERR_MMCE_READ - 22; // EINVAL
+    goto out;
+  }
+  if (!(mmceBuffer = AllocSysMemory(ALLOC_FIRST, size, NULL))) {
+    res = LIVESCAN_ERR_MMCE_READ - 12; // ENOMEM
+    goto out;
+  }
+  if (iomanX_read(fd, mmceBuffer, size) != size) {
+    FreeSysMemory(mmceBuffer);
+    mmceBuffer = NULL;
+    res = LIVESCAN_ERR_MMCE_READ - 5; // EIO
+    goto out;
+  }
+  mmceSize = size;
+
+out:
+  iomanX_close(fd);
+  return res;
+}
+
+// Loads and starts mmceman from IOP RAM. Must be called with the SIO2 threads suspended,
+// since mmceman looks for the MMCE devices when it starts
+static int startMMCE(void) {
+  int id = LoadModuleBuffer(mmceBuffer);
+  FreeSysMemory(mmceBuffer); // LoadModuleBuffer() copies the module
+  mmceBuffer = NULL;
+  if (id < 0)
+    return LIVESCAN_ERR_MMCE_LOAD + id;
+
+  int ret = 1;
+  int res = StartModule(id, "mmceman", 0, NULL, &ret);
+  if ((res < 0) || ((ret & 3) == MODULE_NO_RESIDENT_END))
+    return LIVESCAN_ERR_MMCE_START;
+  shared.mmceLoaded = id;
+  return 0;
+}
+
 static void doScan(void) {
   char mountpoint[8];
+  int res = 0;
   gameCount = 0;
+  shared.watchdogResumed = 0;
+  shared.suspendedCount = 0;
 
+  if (!shared.mmceLoaded) {
+    shared.stage = LIVESCAN_STAGE_READ_MMCE;
+    if ((res = readMMCE()))
+      goto out;
+  }
+
+  shared.stage = LIVESCAN_STAGE_PAUSE;
+  listThreads(1);
+  shared.suspendedCount = pausedCount;
+  if (!pausedCount) {
+    res = LIVESCAN_ERR_NO_THREADS;
+    goto out;
+  }
+  DelayThread(20 * 1000); // Lets a transfer that was running finish
+
+  if (!shared.mmceLoaded) {
+    shared.stage = LIVESCAN_STAGE_LOAD_MMCE;
+    if ((res = startMMCE()))
+      goto out;
+  }
+
+  shared.stage = LIVESCAN_STAGE_SCAN;
   if (shared.devices & LIVESCAN_DEV_MMCE) {
     for (int slot = 0; slot < 2; slot++) {
       sprintf(mountpoint, "mmce%d:", slot);
@@ -289,13 +499,23 @@ static void doScan(void) {
     }
   }
 
+  // The cache is on the memory card, so it's written after resuming the threads
+  shared.stage = LIVESCAN_STAGE_RESUME;
+  resumeThreads();
+
   // Insertion sort by name
   for (unsigned int i = 1; i < gameCount; i++)
     for (unsigned int j = i; (j > 0) && (strCaseCmp(shared.names[j - 1], shared.names[j]) > 0); j--)
       swapGames(j - 1, j);
 
+  shared.stage = LIVESCAN_STAGE_WRITE;
+  res = writeCache();
+
+out:
+  resumeThreads();
   shared.count = gameCount;
-  shared.result = writeCache();
+  shared.result = res;
+  shared.stage = LIVESCAN_STAGE_IDLE;
 }
 
 static unsigned int bcdToInt(unsigned char bcd) { return ((bcd >> 4) * 10 + (bcd & 0xf)) % 100; }
@@ -345,10 +565,14 @@ static void scanThread(void *arg) {
       writeLogChunk(logRequest);
       shared.logRequest = 0;
     }
-    if (shared.request) {
+    unsigned int request = shared.request;
+    if (request) {
       shared.request = 0;
       shared.status = LIVESCAN_STATUS_BUSY;
-      doScan();
+      if (request == LIVESCAN_LIST)
+        listThreads(0);
+      else
+        doScan();
       shared.status = LIVESCAN_STATUS_DONE;
     }
     DelayThread(50 * 1000);
@@ -368,6 +592,16 @@ int _start(int argc, char *argv[]) {
   int tid = CreateThread(&thread);
   if (tid < 0)
     return MODULE_NO_RESIDENT_END;
+
+  // The watchdog runs before anything else, so it gets to resume the threads whatever the scan does
+  thread.thread = watchdogThread;
+  thread.priority = 8;
+  thread.stacksize = 0x400;
+  int watchdog = CreateThread(&thread);
+  if (watchdog < 0)
+    return MODULE_NO_RESIDENT_END;
+
+  StartThread(watchdog, NULL);
   StartThread(tid, NULL);
 
   // Write the magic last so the EE never finds a half-initialized structure

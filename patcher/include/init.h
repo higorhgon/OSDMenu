@@ -27,6 +27,9 @@ const char *liveScanBootReport(int *length);
 // Appends to the report
 #include <stdarg.h>
 void liveScanReportAppendV(const char *fmt, va_list args);
+
+// Empties the report
+void liveScanReportClear(void);
 #endif
 
 #ifdef HOSD

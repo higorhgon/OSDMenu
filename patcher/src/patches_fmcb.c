@@ -207,8 +207,9 @@ static void setGamesLabels(GamesSubmenu *menu, const char *refreshLabel) {
 #ifdef GAMES_MENU
 //
 // Experimental live scan (games_live_scan), see livescan.h.
-// OSDSYS resets the IOP when it starts, so iomanX, mmceman and gamescan.irx are loaded
-// from the memory card with OSDSYS's own sceSifLoadModule() when the scan is first requested.
+// OSDSYS resets the IOP when it starts, so iomanX and gamescan.irx are loaded from the memory card
+// with OSDSYS's own sceSifLoadModule() when the scan is first requested, and gamescan.irx loads mmceman
+// with the controller and memory card threads suspended.
 // gamescan.irx is then controlled by writing directly into its LiveScanShared structure
 // in IOP RAM, since the patcher can't use SIF RPC while OSDSYS is running.
 //
@@ -225,6 +226,8 @@ static int liveScanModulesLoaded = 0; // Modules are only loaded once
 #define LIVESCAN_START_FRAMES 180    // ~3 seconds for gamescan.irx to write its structure
 static int liveScanFrames = 0;
 static uint32_t liveScanHeartbeat = 0;
+static uint32_t liveScanRequest = 0; // LIVESCAN_SCAN or LIVESCAN_LIST
+static uint32_t liveScanStage = 0;   // Last LIVESCAN_STAGE_* shown
 #define liveScanMenu (&settings.submenus[SUBMENU_GAMES]) // Only PS2 games are scanned live
 
 // IOP RAM is accessed with 32-bit uncached reads and writes only.
@@ -407,11 +410,11 @@ static int iopLibraryVersion(const char *name) {
   return table ? (int)(iopRead(table + 8) & 0xffff) : -1;
 }
 
-// Loads live scan module i (0: iomanX, 1: mmceman, 2: gamescan) from the memory card
+// Loads live scan module i (0: iomanX, 1: gamescan) from the memory card
 // with OSDSYS's sceSifLoadModule(). Returns its result
 static int loadLiveScanModule(int i) {
   int (*sceSifLoadModule)(const char *path, int argLength, const char *args) = (void *)settings.liveScanLoader;
-  static const char *paths[] = {LIVESCAN_IRX_IOMANX, LIVESCAN_IRX_MMCEMAN, LIVESCAN_IRX_GAMESCAN};
+  static const char *paths[] = {LIVESCAN_IRX_IOMANX, LIVESCAN_IRX_GAMESCAN};
 
   if ((i == 0) && (iopLibraryVersion("iomanx") >= 0))
     return 0; // Already there
@@ -422,13 +425,11 @@ static int loadLiveScanModule(int i) {
   return sceSifLoadModule(path, 0, NULL);
 }
 
-// Loads the live scan modules, without mmceman for the diagnostics log. Returns 0 on success, or
-// -(module number * 1000 + error) where module number is 1 for iomanX, 2 for mmceman and 3 for gamescan
-static int loadLiveScanModules(int withMMCE) {
+// Loads iomanX and gamescan.irx, which loads mmceman itself. Returns 0 on success, or
+// -(module number * 1000 + error) where module number is 1 for iomanX and 2 for gamescan
+static int loadLiveScanModules(void) {
   liveScanModulesLoaded = 1;
-  for (int i = 0; i < 3; i++) {
-    if ((i == 1) && !withMMCE)
-      continue;
+  for (int i = 0; i < 2; i++) {
     int ret = loadLiveScanModule(i);
     if (ret < 0)
       return -((i + 1) * 1000 - ret);
@@ -461,8 +462,11 @@ static uint32_t iopReadCode(uint32_t addr) { return iopRead(LIVESCAN_IOP_RAM + (
 static const char *liveScanLog = NULL;
 static int liveScanLogLen = 0;
 static int liveScanLogSent = 0;
-static int liveScanLogPending = 0; // The modules are loaded for the log, not for a scan
+static int liveScanLogPending = 0; // The first "Refresh list" with games_live_scan = 2 writes the log instead of scanning
+static int liveScanLogWritten = 0; // The next ones scan, followed by a log of the scan
 static int liveScanLogging = 0;    // The log is being sent to gamescan.irx
+static char liveScanLogLabel[NAME_LEN]; // "Refresh list" label shown with the log name once it's written
+static int liveScanLogFail = 0;         // The live scan is disabled once the log is written
 
 static void logPrintf(const char *fmt, ...) {
 #ifdef LIVESCAN
@@ -501,6 +505,66 @@ static int logExportTable(uint32_t addr, void *userdata) {
   return 0; // Keep going
 }
 
+// GetLoadcoreInternalData() (loadcore export 3) returns the address of loadcore's internal data,
+// loaded with lui/addiu, which holds the list of loaded modules at +16. Returns its IOP address, or 0
+static uint32_t iopLoadcoreInternals(void) {
+  uint32_t loadcore = iopFindExportTable("loadcore");
+  if (!loadcore)
+    return 0;
+  uint32_t func = iopRead(loadcore + 20 + 3 * 4);
+  uint32_t hi = 0;
+  for (int i = 0; i < 6; i++) {
+    uint32_t insn = iopReadCode(func + i * 4);
+    if (((insn >> 26) == 0x0f) && (((insn >> 16) & 0x1f) == 2)) // lui v0, hi
+      hi = insn << 16;
+    else if (((insn >> 26) == 0x09) && (((insn >> 16) & 0x1f) == 2)) // addiu v0, v0, lo
+      return (hi + (int16_t)(insn & 0xffff)) & 0x1fffff;
+  }
+  return 0;
+}
+
+// Copies the name of the IOP module whose code has the IOP address addr into name (17 bytes)
+static void iopModuleName(uint32_t internals, uint32_t addr, char *name) {
+  strcpy(name, "?");
+  addr &= 0x1fffff;
+  uint32_t module = internals ? (iopReadCode(internals + 16) & 0x1fffff) : 0;
+  for (int n = 0; module && (module < LIVESCAN_IOP_RAM_SIZE) && (n < 64); n++) {
+    uint32_t start = iopReadCode(module + 24) & 0x1fffff;
+    if ((addr >= start) && (addr < start + iopReadCode(module + 28))) {
+      uint32_t namePtr = iopReadCode(module + 4) & 0x1fffff;
+      for (int i = 0; namePtr && (i < 16); i += 4) {
+        uint32_t word = iopReadCode(namePtr + i);
+        memcpy(&name[i], &word, 4);
+      }
+      name[16] = '\0';
+      for (int i = 0; name[i]; i++)
+        if ((name[i] < 0x20) || (name[i] > 0x7e))
+          name[i] = '?';
+      return;
+    }
+    module = iopReadCode(module) & 0x1fffff;
+  }
+}
+
+// Logs the threads gamescan.irx found: suspended is the SuspendThread() result, or 1 when left running
+static void logLiveScanThreads(void) {
+  uint32_t internals = iopLoadcoreInternals();
+  uint32_t count = iopRead(LIVESCAN_FIELD(threadCount));
+  if (count > LIVESCAN_MAX_THREADS)
+    count = LIVESCAN_MAX_THREADS;
+  logPrintf("\nThreads (thread tags found %lu, threads %lu):\n  handle   entry  status prio sio2 suspended module\n",
+            iopRead(LIVESCAN_FIELD(tagCount)), count);
+  for (uint32_t i = 0; i < count; i++) {
+    uint32_t thread = LIVESCAN_FIELD(threads) + i * sizeof(LiveScanThread);
+    uint32_t entry = iopRead(thread + offsetof(LiveScanThread, entry));
+    char name[17];
+    iopModuleName(internals, entry, name);
+    logPrintf("  %08lx %05lx %6lx %4ld %4ld %9ld %s\n", iopRead(thread + offsetof(LiveScanThread, handle)), entry & 0x1fffff,
+              iopRead(thread + offsetof(LiveScanThread, status)), iopRead(thread + offsetof(LiveScanThread, priority)),
+              iopRead(thread + offsetof(LiveScanThread, sio2)), (int32_t)iopRead(thread + offsetof(LiveScanThread, suspended)), name);
+  }
+}
+
 // Lists the library versions, the number of exports of the thread libraries and the IOP modules
 // OSDSYS loaded (name, text start and size) in the log and the Games submenu entries
 static int showIopDiagnostics(GamesSubmenu *menu) {
@@ -525,23 +589,7 @@ static int showIopDiagnostics(GamesSubmenu *menu) {
     exportCounts[lib] = table ? count : -1;
   }
 
-  // GetLoadcoreInternalData() (loadcore export 3) returns the address of loadcore's internal data,
-  // loaded with lui/addiu, which holds the list of loaded modules at +16
-  uint32_t loadcore = iopFindExportTable("loadcore");
-  uint32_t internals = 0;
-  if (loadcore) {
-    uint32_t func = iopRead(loadcore + 20 + 3 * 4);
-    uint32_t hi = 0;
-    for (int i = 0; i < 6; i++) {
-      uint32_t insn = iopReadCode(func + i * 4);
-      if (((insn >> 26) == 0x0f) && (((insn >> 16) & 0x1f) == 2)) // lui v0, hi
-        hi = insn << 16;
-      else if (((insn >> 26) == 0x09) && (((insn >> 16) & 0x1f) == 2)) { // addiu v0, v0, lo
-        internals = (hi + (int16_t)(insn & 0xffff)) & 0x1fffff;
-        break;
-      }
-    }
-  }
+  uint32_t internals = iopLoadcoreInternals();
   diagLine(menu, "thbase %d thsemap %d thevent %d lc %lx", exportCounts[0], exportCounts[1], exportCounts[2], internals);
 
   // Registered libraries from loadcore's list (internals +0, linked through the first word)
@@ -633,9 +681,12 @@ static void iopWriteBytes(uint32_t addr, const char *data, int len) {
   }
 }
 
-// Builds the log and starts sending it to gamescan.irx, which writes it with the console clock in its name
-static void startLiveScanLog(GamesSubmenu *menu) {
-  showIopDiagnostics(menu);
+// Starts sending the report to gamescan.irx, which writes it with the console clock in its name.
+// Once written, label is shown with the log name, and the live scan is disabled if fail is set
+static void sendLiveScanLog(GamesSubmenu *menu, const char *label, int fail) {
+  strncpy(liveScanLogLabel, label, sizeof(liveScanLogLabel) - 1);
+  liveScanLogLabel[sizeof(liveScanLogLabel) - 1] = '\0';
+  liveScanLogFail = fail;
   liveScanLog = NULL;
   liveScanLogLen = 0;
 #ifdef LIVESCAN
@@ -655,6 +706,15 @@ static void startLiveScanLog(GamesSubmenu *menu) {
   setMenuEntry(0, slot);
   menuInfo->entryCount = 3;
   menuInfo->currentEntry = 2;
+}
+
+// First "Refresh list" with games_live_scan = 2: the boot report, the IOP state and the threads,
+// listed without suspending them. The next "Refresh list" scans
+static void startLiveScanLog(GamesSubmenu *menu) {
+  showIopDiagnostics(menu);
+  logLiveScanThreads();
+  liveScanLogWritten = 1;
+  sendLiveScanLog(menu, "Refresh list", 0);
 }
 
 // Sends the next log chunk once gamescan.irx is done with the previous one. Called every frame
@@ -679,14 +739,17 @@ static void pollLiveScanLog(void) {
   }
 
   if (liveScanLogSent >= liveScanLogLen) {
-    // Done: show the file name. The next "Refresh list" scans with the launcher
+    // Done: show the file name
     char name[LIVESCAN_LOG_NAME_LEN];
     char label[NAME_LEN];
     iopReadString(LIVESCAN_FIELD(logName), name, LIVESCAN_LOG_NAME_LEN);
     const char *file = strrchr(name, '/');
-    snprintf(label, sizeof(label), "Refresh list [%s]", file ? file + 1 : name);
+    snprintf(label, sizeof(label), "%.48s [%.28s]", liveScanLogLabel, file ? file + 1 : name);
     liveScanLogging = 0;
-    failLiveScan(label);
+    if (liveScanLogFail)
+      failLiveScan(label);
+    else
+      showLiveScanLabel(label);
     return;
   }
 
@@ -728,8 +791,26 @@ void findLiveScanLoader(uint8_t *osd) {
     settings.liveScanLoader = (uint32_t)ptr;
 }
 
-// Sends the scan request to gamescan.irx and shows "Scanning..." until it's done
-static void requestLiveScan(GamesSubmenu *menu) {
+// Shown while scanning, by LIVESCAN_STAGE_*
+static const char *liveScanStageLabels[] = {"Scanning...",      "Reading mmceman...",         "Pausing the controller...", "Loading mmceman...",
+                                            "Scanning MMCE...", "Resuming the controller...", "Saving the list..."};
+#define LIVESCAN_STAGES (sizeof(liveScanStageLabels) / sizeof(liveScanStageLabels[0]))
+
+// Describes a gamescan.irx error
+static const char *liveScanErrorName(int result) {
+  if (result == LIVESCAN_ERR_NO_THREADS)
+    return "no controller threads found";
+  if (result == LIVESCAN_ERR_MMCE_START)
+    return "mmceman didn't start";
+  if (result <= LIVESCAN_ERR_MMCE_LOAD)
+    return "mmceman load error";
+  if (result <= LIVESCAN_ERR_MMCE_READ)
+    return "mmceman read error";
+  return "write error";
+}
+
+// Sends the request (LIVESCAN_SCAN or LIVESCAN_LIST) to gamescan.irx and shows its progress until it's done
+static void requestLiveScan(GamesSubmenu *menu, uint32_t request) {
   iopWrite(LIVESCAN_FIELD(devices), LIVESCAN_DEV_MMCE);
   iopWriteString(LIVESCAN_FIELD(cdFolder), settings.gamesCdFolder, LIVESCAN_FOLDER_LEN);
   iopWriteString(LIVESCAN_FIELD(dvdFolder), settings.gamesDvdFolder, LIVESCAN_FOLDER_LEN);
@@ -737,16 +818,21 @@ static void requestLiveScan(GamesSubmenu *menu) {
   if (settings.mcSlot == 1)
     cachePath[2] = '1';
   iopWriteString(LIVESCAN_FIELD(cachePath), cachePath, LIVESCAN_PATH_LEN);
+  char mmcePath[] = LIVESCAN_IRX_MMCEMAN;
+  mmcePath[2] = (settings.mcSlot == 1) ? '1' : '0';
+  iopWriteString(LIVESCAN_FIELD(mmcePath), mmcePath, LIVESCAN_PATH_LEN);
   iopWrite(LIVESCAN_FIELD(status), LIVESCAN_STATUS_IDLE);
-  iopWrite(LIVESCAN_FIELD(request), 1);
+  iopWrite(LIVESCAN_FIELD(request), request);
+  liveScanRequest = request;
+  liveScanStage = LIVESCAN_STAGE_IDLE;
 
   liveScanHeartbeat = iopRead(LIVESCAN_FIELD(heartbeat));
   liveScanFrames = 0;
   liveScanActive = 1;
 
-  // Show "Scanning..." as the only entry, using the "Refresh list" label slot
+  // Show the progress as the only entry, using the "Refresh list" label slot
   int slot = menu->base + menu->count + 1;
-  strcpy(settings.menuItemName[slot], "Scanning...");
+  strcpy(settings.menuItemName[slot], (request == LIVESCAN_LIST) ? "Listing IOP threads..." : "Scanning...");
   setMenuEntry(0, slot);
   menuInfo->entryCount = 3;
   menuInfo->currentEntry = 2;
@@ -763,17 +849,14 @@ static int startLiveScan(GamesSubmenu *menu) {
     setGamesLabels(menu, "Refresh list");
   }
 
-  // games_live_scan = 2 writes a diagnostics log instead, loading gamescan.irx without mmceman,
-  // which stops the controller for now (see the README)
-  liveScanLogPending = (settings.gamesLiveScan == 2);
+  // With games_live_scan = 2, the first "Refresh list" writes a diagnostics log instead of scanning,
+  // and the next ones write a log of the scan
+  liveScanLogPending = (settings.gamesLiveScan == 2) && !liveScanLogWritten;
 
   if (!liveScanAddr)
     liveScanAddr = findLiveScan();
   if (liveScanAddr) {
-    if (liveScanLogPending)
-      startLiveScanLog(menu);
-    else
-      requestLiveScan(menu);
+    requestLiveScan(menu, liveScanLogPending ? LIVESCAN_LIST : LIVESCAN_SCAN);
     return 1;
   }
 
@@ -816,7 +899,7 @@ static void pollLiveScan(void) {
   if (liveScanLoadFrames) {
     if (--liveScanLoadFrames)
       return;
-    liveScanLoadResult = loadLiveScanModules(!liveScanLogPending);
+    liveScanLoadResult = loadLiveScanModules();
     if (liveScanLoadResult < 0) {
       char label[NAME_LEN];
       snprintf(label, sizeof(label), "Refresh list (live scan: load error %d)", liveScanLoadResult);
@@ -831,10 +914,7 @@ static void pollLiveScan(void) {
     // gamescan.irx writes its structure once its thread starts
     if (!(liveScanFrames++ % 15) && (liveScanAddr = findLiveScan())) {
       liveScanWaitFrames = 0;
-      if (liveScanLogPending)
-        startLiveScanLog(liveScanMenu);
-      else
-        requestLiveScan(liveScanMenu);
+      requestLiveScan(liveScanMenu, liveScanLogPending ? LIVESCAN_LIST : LIVESCAN_SCAN);
       return;
     }
     if (!--liveScanWaitFrames)
@@ -849,12 +929,23 @@ static void pollLiveScan(void) {
   }
 
   if ((iopRead(LIVESCAN_FIELD(status)) != LIVESCAN_STATUS_DONE) || iopRead(LIVESCAN_FIELD(request))) {
+    // Show what gamescan.irx is doing
+    uint32_t stage = iopRead(LIVESCAN_FIELD(stage));
+    if ((liveScanRequest == LIVESCAN_SCAN) && (stage != liveScanStage) && (stage < LIVESCAN_STAGES)) {
+      liveScanStage = stage;
+      strcpy(settings.menuItemName[liveScanMenu->base + liveScanMenu->count + 1], liveScanStageLabels[stage]);
+    }
     if (liveScanFrames > LIVESCAN_TIMEOUT_FRAMES)
       failLiveScan("Refresh list (live scan: timeout)");
     return;
   }
 
   GamesSubmenu *menu = liveScanMenu;
+  if (liveScanRequest == LIVESCAN_LIST) {
+    startLiveScanLog(menu);
+    return;
+  }
+
   int result = (int)iopRead(LIVESCAN_FIELD(result));
   int count = iopRead(LIVESCAN_FIELD(count));
   if (count > menu->max)
@@ -862,14 +953,13 @@ static void pollLiveScan(void) {
   if (count > LIVESCAN_MAX_GAMES)
     count = LIVESCAN_MAX_GAMES;
 
+  char label[NAME_LEN] = "Refresh list";
   if (result < 0) {
     // The cache the launcher reads wasn't updated, so the list can't be launched from
-    char label[NAME_LEN];
-    snprintf(label, sizeof(label), "Refresh list (live scan: write error %d)", result);
-    menu->count = 0;
-    failLiveScan(label);
-    return;
-  }
+    snprintf(label, sizeof(label), "Refresh list (live scan: %s %d)", liveScanErrorName(result), result);
+    count = 0;
+  } else if (iopRead(LIVESCAN_FIELD(watchdogResumed)))
+    strcpy(label, "Refresh list (live scan: controller resumed by the watchdog)");
 
   // gamescan.irx doesn't keep the "played" counters, so the list is shown by name
   for (int i = 0; i < count; i++) {
@@ -877,10 +967,31 @@ static void pollLiveScan(void) {
     menu->played[i] = 0;
   }
   menu->count = count;
-  menu->cacheLoaded = 1;
+  if (result >= 0)
+    menu->cacheLoaded = 1;
 
+  if (settings.gamesLiveScan == 2) {
+    // Log of the scan: its result and the threads, with the suspend results
+#ifdef LIVESCAN
+    liveScanReportClear();
+#endif
+    logPrintf("OSDMenu live scan log\nROMVER %s\n\nScan result %d, games %d, SIO2 threads suspended %ld, watchdog %ld, mmceman %ld\n",
+              settings.romver, result, count, iopRead(LIVESCAN_FIELD(suspendedCount)), iopRead(LIVESCAN_FIELD(watchdogResumed)),
+              iopRead(LIVESCAN_FIELD(mmceLoaded)));
+    logLiveScanThreads();
+    logPrintf("\nGames:\n");
+    for (int i = 0; i < count; i++)
+      logPrintf("  %s\n", settings.menuItemName[menu->base + i]);
+    sendLiveScanLog(menu, label, result < 0);
+    return;
+  }
+
+  if (result < 0) {
+    failLiveScan(label);
+    return;
+  }
   liveScanActive = 0;
-  setGamesLabels(menu, "Refresh list");
+  setGamesLabels(menu, label);
   sortGames(menu);
   showGamesEntries(menu);
 }
