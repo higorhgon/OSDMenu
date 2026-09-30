@@ -162,9 +162,13 @@ These options are also read by the **launcher**:
   loads them with OSDSYS's own `sceSifLoadModule()` ("Loading modules..."). It then controls `gamescan.irx` through
   shared IOP memory, showing "Scanning..." until the list is ready. Errors are shown in the "Refresh list" label, and the
   next "Refresh list" falls back to the launcher. `mmceman` only works with the `sio2man` versions 1.2 and 2.7.
-  With `games_live_scan = 2`, the first "Refresh list" only shows the loaded `sio2man` and `iomanx` versions and the
-  address of OSDSYS's module loader, and `mc?:/SYS-CONF/OSDMLIVE.LOG` is written on boot. May break OSDSYS memory card
-  or controller access
+  Before loading, MODLOAD's check that only allows loading modules from `rom0:` is disabled, like PS2SDK's
+  `sbv_patch_disable_prefix_check()` does.
+  With `games_live_scan = 2`, every "Refresh list" runs one step and shows its result, so the step that fails or hangs
+  can be told from the last label on screen: the loaded `sio2man`/`iomanx` versions and the loader address, the MODLOAD
+  patch, a test load of `rom0:SIO2MAN` (fails right away, since it's already loaded), then `iomanX`, `mmceman` and
+  `gamescan.irx`, followed by the scan. `mc?:/SYS-CONF/OSDMLIVE.LOG` is also written on boot.
+  May break OSDSYS memory card or controller access
 - `games_return_path` — ELF to run after "Refresh list" or a failed game launch (e.g. `mc?:/BOOT/BOOT.ELF`). When not set, the launcher reopens OSDMenu (with the games submenu open) from the path it was started from, then tries `mc?:/BOOT/osdmenu.elf`, and only falls back to the original OSDSYS if both fail
 - `psx_device_usb`, `psx_device_mx4sio`, `psx_device_mmce` — enable scanning each device type for PS1 games (default: all disabled)
 
