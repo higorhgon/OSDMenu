@@ -327,18 +327,32 @@ static int isIopFunctionAddress(uint32_t value) {
 #define IRX_EXPORT_MAGIC 0x41c00000
 #define IRX_IMPORT_MAGIC 0x41e00000
 
-// Returns 1 if the IOP RAM at addr (EE address) holds an export table: export magic, a printable
-// name at +12 and, from +20, function addresses or NULL, with at least one function among exports 4-7
+// Returns 1 if the IOP RAM at addr (EE address) holds an export table. Registered tables become loadcore's
+// iop_library_t, where the magic and next words are replaced with the previous library and the importers:
+//   +0 export magic or previous library, +4 next table or importer list, +8 version, +10 flags, +12 name[8],
+//   +20 exports: function addresses or NULL, with at least one function among exports 4-7
+// The name must be at least 3 characters from [a-z0-9_] (IOP library names are lowercase)
 static int isExportTable(volatile uint32_t *w) {
-  if (w[0] != IRX_EXPORT_MAGIC)
+  if ((w[0] != IRX_EXPORT_MAGIC) && w[0] && !isIopFunctionAddress(w[0]))
     return 0;
-  for (int i = 0; i < 8; i++) {
-    char c = ((volatile char *)&w[3])[i];
+  if (w[1] && !isIopFunctionAddress(w[1]))
+    return 0;
+  if (!(w[2] & 0xffff) || ((w[2] & 0xffff) > 0x0fff))
+    return 0; // Version, like 0x0102
+
+  int nameLen = 0;
+  for (; nameLen < 8; nameLen++) {
+    char c = ((volatile char *)&w[3])[nameLen];
     if (!c)
       break;
-    if ((c < 0x20) || (c > 0x7e))
+    if (!(((c >= 'a') && (c <= 'z')) || ((c >= '0') && (c <= '9')) || (c == '_')))
       return 0;
   }
+  if (nameLen < 3)
+    return 0;
+  for (int i = nameLen; i < 8; i++)
+    if (((volatile char *)&w[3])[i])
+      return 0; // Padded with NUL
 
   int functions = 0;
   for (int i = 0; i < 8; i++) {
@@ -482,7 +496,8 @@ static int logExportTable(uint32_t addr, void *userdata) {
   int count = 4;
   while ((count < 256) && iopRead(addr + 20 + count * 4))
     count++;
-  logPrintf("  %-8s v%04lx @%05lx exports %d\n", name, iopRead(addr + 8) & 0xffff, addr - LIVESCAN_IOP_RAM, count);
+  logPrintf("  %-8s v%04lx @%05lx exports %3d [%08lx %08lx]\n", name, iopRead(addr + 8) & 0xffff, addr - LIVESCAN_IOP_RAM, count, iopRead(addr),
+            iopRead(addr + 4));
   return 0; // Keep going
 }
 
@@ -529,14 +544,28 @@ static int showIopDiagnostics(GamesSubmenu *menu) {
   }
   diagLine(menu, "thbase %d thsemap %d thevent %d lc %lx", exportCounts[0], exportCounts[1], exportCounts[2], internals);
 
-  // Every export table in IOP RAM: the registered libraries
+  // Registered libraries from loadcore's list (internals +0, linked through the first word)
+  logPrintf("\nLibraries (loadcore list):\n");
+  uint32_t library = internals ? (iopReadCode(internals) & 0x1fffff) : 0;
+  for (int n = 0; library && (library < LIVESCAN_IOP_RAM_SIZE) && (n < 64); n++) {
+    uint32_t words[2] = {iopReadCode(library + 12), iopReadCode(library + 16)};
+    char name[9] = {0};
+    memcpy(name, words, 8);
+    for (int i = 0; name[i]; i++)
+      if ((name[i] < 0x20) || (name[i] > 0x7e))
+        name[i] = '?';
+    logPrintf("  %-8s v%04lx @%05lx\n", name, iopReadCode(library + 8) & 0xffff, library);
+    library = iopReadCode(library) & 0x1fffff;
+  }
+
+  // Every export table in IOP RAM, registered or not
   logPrintf("\nExport tables:\n");
   iopForEachExportTable(logExportTable, NULL);
 
-  // Raw headers of the tables with the export magic, marked E if they pass isExportTable()
-  logPrintf("\nTables with the export magic (first 80):\n");
+  // Raw headers of the export tables that are still unregistered (with the export magic), marked E if they pass
+  logPrintf("\nTables with the export magic (first 30):\n");
   int tables = 0;
-  for (uint32_t addr = LIVESCAN_IOP_RAM; (addr < LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - 64) && (tables < 80); addr += 4) {
+  for (uint32_t addr = LIVESCAN_IOP_RAM; (addr < LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - 64) && (tables < 30); addr += 4) {
     if (iopRead(addr) != IRX_EXPORT_MAGIC)
       continue;
     uint32_t words[2] = {iopRead(addr + 12), iopRead(addr + 16)};
