@@ -392,54 +392,9 @@ static uint32_t iopDiagLibTables[IOP_DIAG_LIBS];
 // Reads a word of IOP code at the IOP address addr
 static uint32_t iopReadCode(uint32_t addr) { return iopRead(LIVESCAN_IOP_RAM + (addr & 0x1ffffc)); }
 
-// Names the IOP function at addr as "<library>:<export index>", returns 0 if it isn't an export of iopDiagLibNames
-static int nameIopFunction(uint32_t addr, char *out, int size) {
-  for (unsigned int lib = 0; lib < IOP_DIAG_LIBS; lib++) {
-    if (!iopDiagLibTables[lib])
-      continue;
-    for (int e = 0; e < 64; e++) {
-      uint32_t func = iopRead(iopDiagLibTables[lib] + 20 + e * 4);
-      if (!func)
-        break;
-      if ((func & 0x1fffff) == (addr & 0x1fffff)) {
-        snprintf(out, size, "%s:%d", iopDiagLibNames[lib], e);
-        return 1;
-      }
-    }
-  }
-  return 0;
-}
-
-// Appends the calls made by the IOP function at addr to line: library exports by name (through their
-// linked import stubs, "j <function>"), and the calls of local functions one level deep in brackets
-static void describeIopCalls(uint32_t addr, char *line, int size, int depth) {
-  for (int i = 0; i < 48; i++) {
-    uint32_t insn = iopReadCode(addr + i * 4);
-    int len = strlen(line);
-    if (len >= size - 12)
-      return;
-    if ((insn >> 26) == 0x03) { // jal
-      uint32_t target = (insn & 0x03ffffff) << 2;
-      uint32_t stub = iopReadCode(target);
-      char name[24];
-      if (((stub >> 26) == 0x02) && nameIopFunction((stub & 0x03ffffff) << 2, name, sizeof(name)))
-        snprintf(&line[len], size - len, " %s", name);
-      else if (!depth) {
-        snprintf(&line[len], size - len, " [%lx", target);
-        describeIopCalls(target, line, size, 1);
-        len = strlen(line);
-        snprintf(&line[len], size - len, "]");
-      } else
-        snprintf(&line[len], size - len, " %lx", target);
-    }
-    if (insn == 0x03e00008) // jr ra
-      return;
-  }
-}
-
-// games_live_scan = 2, first step: lists what OSDSYS's rom0:SIO2MAN does in the lock (export 23 and 24),
-// transfer (25) and unlock (26) functions, as the Games submenu entries
-static int showSio2Diagnostics(GamesSubmenu *menu) {
+// games_live_scan = 2, first step: lists the library versions, the number of exports of the thread libraries
+// and the IOP modules OSDSYS loaded (name, text start and size), as the Games submenu entries
+static int showIopDiagnostics(GamesSubmenu *menu) {
   for (unsigned int lib = 0; lib < IOP_DIAG_LIBS; lib++)
     iopDiagLibTables[lib] = iopFindExportTable(iopDiagLibNames[lib]);
 
@@ -450,23 +405,51 @@ static int showSio2Diagnostics(GamesSubmenu *menu) {
            sio2 ? (sio2 - LIVESCAN_IOP_RAM) : 0, iopLibraryVersion("padman"), iopLibraryVersion("mcman"), iopLibraryVersion("iomanx"),
            settings.liveScanLoader);
   lines++;
-  if (sio2) {
-    for (int e = 23; (e <= 26) && (lines < menu->max - 2); e++) {
-      uint32_t func = iopRead(sio2 + 20 + e * 4);
-      snprintf(DIAG_LINE, NAME_LEN, "e%d %lx:", e, func);
-      describeIopCalls(func, DIAG_LINE, NAME_LEN, 0);
-      lines++;
-    }
-    // Raw code of the lock (23) and unlock (26) functions
-    for (int e = 23; e <= 26; e += 3) {
-      uint32_t func = iopRead(sio2 + 20 + e * 4);
-      for (int part = 0; (part < 2) && (lines < menu->max); part++) {
-        int len = snprintf(DIAG_LINE, NAME_LEN, "%d+%d", e, part * 6);
-        for (int w = 0; w < 6; w++)
-          len += snprintf(&DIAG_LINE[len], NAME_LEN - len, " %08lx", iopReadCode(func + (part * 6 + w) * 4));
-        lines++;
+
+  // Number of exports of the thread libraries: thbase needs 48 for GetThreadmanIdList() (export 47)
+  int exportCounts[3] = {0, 0, 0};
+  for (int lib = 0; lib < 3; lib++) {
+    uint32_t table = iopDiagLibTables[(lib == 0) ? 2 : (lib - 1)]; // thbase, thsemap, thevent
+    while (table && (exportCounts[lib] < 128) && iopRead(table + 20 + exportCounts[lib] * 4))
+      exportCounts[lib]++;
+  }
+
+  // GetLoadcoreInternalData() (loadcore export 3) returns the address of loadcore's internal data,
+  // loaded with lui/addiu, which holds the list of loaded modules at +16
+  uint32_t loadcore = iopFindExportTable("loadcore");
+  uint32_t internals = 0;
+  if (loadcore) {
+    uint32_t func = iopRead(loadcore + 20 + 3 * 4);
+    uint32_t hi = 0;
+    for (int i = 0; i < 6; i++) {
+      uint32_t insn = iopReadCode(func + i * 4);
+      if (((insn >> 26) == 0x0f) && (((insn >> 16) & 0x1f) == 2)) // lui v0, hi
+        hi = insn << 16;
+      else if (((insn >> 26) == 0x09) && (((insn >> 16) & 0x1f) == 2)) { // addiu v0, v0, lo
+        internals = (hi + (int16_t)(insn & 0xffff)) & 0x1fffff;
+        break;
       }
     }
+  }
+  snprintf(DIAG_LINE, NAME_LEN, "thbase %d thsemap %d thevent %d lc %lx", exportCounts[0], exportCounts[1], exportCounts[2], internals);
+  lines++;
+
+  // Loaded IOP modules: name, text start and size
+  uint32_t module = internals ? (iopReadCode(internals + 16) & 0x1fffff) : 0;
+  for (int n = 0; module && (module < LIVESCAN_IOP_RAM_SIZE) && (n < 48) && (lines < menu->max); n++) {
+    char name[17] = {0};
+    uint32_t namePtr = iopReadCode(module + 4) & 0x1fffff;
+    for (int i = 0; namePtr && (i < 16); i += 4) {
+      uint32_t word = iopReadCode(namePtr + i);
+      memcpy(&name[i], &word, 4);
+    }
+    name[16] = '\0';
+    for (int i = 0; name[i]; i++)
+      if ((name[i] < 0x20) || (name[i] > 0x7e))
+        name[i] = '?';
+    snprintf(DIAG_LINE, NAME_LEN, "%.12s %lx+%lx", name, iopReadCode(module + 24), iopReadCode(module + 28));
+    lines++;
+    module = iopReadCode(module) & 0x1fffff;
   }
 #undef DIAG_LINE
   for (int i = 0; i < lines; i++)
@@ -483,9 +466,11 @@ static void runLiveScanDiagStep(GamesSubmenu *menu) {
   int ret;
   switch (liveScanDiagStep) {
   case 0:
-    showSio2Diagnostics(menu);
-    snprintf(label, sizeof(label), "Refresh [diag, next: iomanX]");
-    break;
+    // Loading mmceman stops the controller for now (see the README), so only the diagnostics are shown
+    // and the next "Refresh list" scans with the launcher
+    showIopDiagnostics(menu);
+    failLiveScan("Refresh list [diag]");
+    return;
   case 1:
   case 2:
   case 3: {
