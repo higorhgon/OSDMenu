@@ -162,8 +162,9 @@ These options are also read by the **launcher**:
   loads them with OSDSYS's own `sceSifLoadModule()` ("Loading modules..."). It then controls `gamescan.irx` through
   shared IOP memory, showing "Scanning..." until the list is ready. Errors are shown in the "Refresh list" label, and the
   next "Refresh list" falls back to the launcher.
-  OSDSYS loads `rom0:SIO2MAN`, which only has the `sio2man` 1.2 interface, so the patcher embeds a build of `mmceman`
-  that also locks the SIO2 through it (without the lock, the controller stops responding).
+  **Known issue**: OSDSYS's `rom0:SIO2MAN` (ROM 2.30) only exports the SIO2 register functions, without the transfer
+  lock `mmceman` uses to share the SIO2 with the controller and memory card drivers, so loading `mmceman` stops the
+  controller.
   With `games_live_scan = 2`, every "Refresh list" runs one step and shows its result, so the step that fails or hangs
   can be told from the last label on screen: the loaded `sio2man`/`iomanx` versions and the loader address, then
   `iomanX`, `mmceman` and `gamescan.irx`, followed by the scan. `mc?:/SYS-CONF/OSDMLIVE.LOG` is also written on boot.
