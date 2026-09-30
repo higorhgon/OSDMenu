@@ -3,6 +3,7 @@
 
 #include "irx.h"
 
+#include "cdvdman.h"
 #include "iomanX.h"
 #include "loadcore.h"
 #include "sysclib.h"

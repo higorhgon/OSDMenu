@@ -165,10 +165,12 @@ These options are also read by the **launcher**:
   **Known issue**: OSDSYS's `rom0:SIO2MAN` (ROM 2.30) only exports the SIO2 register functions, without the transfer
   lock `mmceman` uses to share the SIO2 with the controller and memory card drivers, so loading `mmceman` stops the
   controller.
-  With `games_live_scan = 2`, "Refresh list" doesn't load anything: it lists the loaded `sio2man`, `padman`, `mcman`
-  and `iomanx` versions, the number of exports of the IOP thread libraries and the IOP modules loaded by OSDSYS
-  (name, text address and size) as the Games submenu entries. The next "Refresh list" scans with the launcher.
-  `mc?:/SYS-CONF/OSDMLIVE.LOG` is also written on boot.
+  With `games_live_scan = 2`, "Refresh list" writes a diagnostics log instead of scanning: it loads only `iomanX` and
+  `gamescan.irx` (not `mmceman`), and `gamescan.irx` writes `mc?:/SYS-CONF/OSDMLIVE-<YYMMDD>-<HHMMSS>.LOG` (console
+  clock) with the boot report (OSDSYS module loading code) and the IOP state: the loaded `sio2man`, `padman`, `mcman` and
+  `iomanx` versions, the number of exports of the IOP thread libraries and every IOP module OSDSYS loaded (name,
+  addresses and sizes). The log name is shown in the "Refresh list" label, and the IOP state also in the Games submenu.
+  The next "Refresh list" scans with the launcher. `mc?:/SYS-CONF/OSDMLIVE.LOG` is also written on boot.
   May break OSDSYS memory card or controller access
 - `games_return_path` — ELF to run after "Refresh list" or a failed game launch (e.g. `mc?:/BOOT/BOOT.ELF`). When not set, the launcher reopens OSDMenu (with the games submenu open) from the path it was started from, then tries `mc?:/BOOT/osdmenu.elf`, and only falls back to the original OSDSYS if both fail
 - `psx_device_usb`, `psx_device_mx4sio`, `psx_device_mmce` — enable scanning each device type for PS1 games (default: all disabled)

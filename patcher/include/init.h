@@ -21,6 +21,12 @@ int writeLiveScanModules();
 
 // Writes mc?:/SYS-CONF/OSDMLIVE.LOG with the OSDSYS module loading code (games_live_scan = 2)
 void writeLiveScanDiagnostics(uint8_t *osd);
+
+// Returns the report written by writeLiveScanDiagnostics() and liveScanReportAppendV()
+const char *liveScanBootReport(int *length);
+// Appends to the report
+#include <stdarg.h>
+void liveScanReportAppendV(const char *fmt, va_list args);
 #endif
 
 #ifdef HOSD

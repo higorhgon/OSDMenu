@@ -20,7 +20,7 @@
 #define LIVESCAN_MAGIC0 0x4d44534f // "OSDM"
 #define LIVESCAN_MAGIC1 0x4556494c // "LIVE"
 #define LIVESCAN_MAGIC2 0x4e414353 // "SCAN"
-#define LIVESCAN_MAGIC3 0x31303030 // "0001"
+#define LIVESCAN_MAGIC3 0x32303030 // "0002"
 
 #define LIVESCAN_IOP_RAM 0xbc000000 // IOP RAM as seen from the EE (uncached)
 #define LIVESCAN_IOP_RAM_SIZE 0x200000
@@ -38,6 +38,15 @@
 // devices
 #define LIVESCAN_DEV_MMCE (1 << 0)
 
+// logRequest: the EE sends a log in chunks of up to LIVESCAN_LOG_CHUNK bytes, which gamescan.irx
+// writes to <logName directory>OSDMLIVE-<YYMMDD>-<HHMMSS>.LOG (console clock), with the full path
+// written back to logName. Cleared by the IOP when the chunk is written
+#define LIVESCAN_LOG_CHUNK 4096
+#define LIVESCAN_LOG_NAME_LEN 48
+#define LIVESCAN_LOG_FIRST 1 // Creates the file with the first chunk
+#define LIVESCAN_LOG_NEXT 2  // Appends the next chunk
+#define LIVESCAN_LOG_LAST 4  // Closes the file after the chunk (combined with FIRST or NEXT)
+
 typedef struct {
   unsigned int magic[4];
   volatile unsigned int heartbeat; // Incremented by the IOP thread on every poll
@@ -49,6 +58,11 @@ typedef struct {
   char cdFolder[LIVESCAN_FOLDER_LEN];
   char dvdFolder[LIVESCAN_FOLDER_LEN];
   char cachePath[LIVESCAN_PATH_LEN]; // GAMES_CACHE_PATH on the right memory card, set by the EE
+  volatile unsigned int logRequest;  // LIVESCAN_LOG_*
+  volatile int logResult;            // Bytes written, or < 0 on error
+  unsigned int logLength;            // Bytes in logBuffer
+  char logName[LIVESCAN_LOG_NAME_LEN]; // Directory (up to 20 characters) set by the EE, full path set by the IOP
+  char logBuffer[LIVESCAN_LOG_CHUNK];
   char names[LIVESCAN_MAX_GAMES][LIVESCAN_NAME_LEN];
 } LiveScanShared;
 

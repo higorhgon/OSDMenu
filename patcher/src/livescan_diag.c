@@ -20,13 +20,17 @@
 static char report[24 * 1024];
 static int reportLen = 0;
 
-static void out(const char *fmt, ...) {
-  va_list args;
-  va_start(args, fmt);
+void liveScanReportAppendV(const char *fmt, va_list args) {
   if (reportLen < (int)sizeof(report) - 1)
     reportLen += vsnprintf(&report[reportLen], sizeof(report) - reportLen, fmt, args);
   if (reportLen > (int)sizeof(report) - 1)
     reportLen = sizeof(report) - 1;
+}
+
+static void out(const char *fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+  liveScanReportAppendV(fmt, args);
   va_end(args);
 }
 
@@ -76,6 +80,13 @@ static void findReferences(uint8_t *osd, uint32_t strAddr) {
   }
   if (!refs)
     out("    no references\n");
+}
+
+// Returns the report written on boot, followed by what was appended with liveScanReportAppendV(),
+// which is sent as the games_live_scan = 2 log
+const char *liveScanBootReport(int *length) {
+  *length = reportLen;
+  return report;
 }
 
 void writeLiveScanDiagnostics(uint8_t *osd) {

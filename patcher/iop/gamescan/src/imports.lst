@@ -22,6 +22,10 @@ I_strstr
 I_tolower
 sysclib_IMPORTS_end
 
+cdvdman_IMPORTS_start
+I_sceCdReadClock
+cdvdman_IMPORTS_end
+
 thbase_IMPORTS_start
 I_CreateThread
 I_StartThread

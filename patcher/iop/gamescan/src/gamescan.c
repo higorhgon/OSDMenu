@@ -1,9 +1,10 @@
 // gamescan.irx: experimental live games scan for the OSDMenu games submenu (games_live_scan)
 //
-// Loaded by the patcher before OSDSYS starts. Polls a LiveScanShared structure
+// Loaded through OSDSYS by the patcher (see livescan.h). Polls a LiveScanShared structure
 // that the patcher writes directly into IOP RAM, scans the CD/DVD folders of
 // MMCE devices when requested and writes GAMES_CACHE_PATH in the same format
 // as the launcher's games handler, so launching games keeps working unchanged.
+// Also writes the diagnostics logs the patcher sends (games_live_scan = 2).
 #include "irx_imports.h"
 #include "livescan.h"
 #include <iox_stat.h>
@@ -297,9 +298,53 @@ static void doScan(void) {
   shared.result = writeCache();
 }
 
+static unsigned int bcdToInt(unsigned char bcd) { return ((bcd >> 4) * 10 + (bcd & 0xf)) % 100; }
+
+// Writes the log chunk in logBuffer, creating the file named after the console clock with the first one
+static int logFd = -1;
+static void writeLogChunk(unsigned int request) {
+  if (request & LIVESCAN_LOG_FIRST) {
+    if (logFd >= 0)
+      iomanX_close(logFd);
+
+    char dir[LIVESCAN_LOG_NAME_LEN];
+    strncpy(dir, shared.logName, sizeof(dir) - 1);
+    dir[sizeof(dir) - 1] = '\0';
+    sceCdCLOCK clock;
+    memset(&clock, 0, sizeof(clock));
+    static unsigned int counter = 0;
+    if (sceCdReadClock(&clock) && !clock.stat)
+      sprintf(shared.logName, "%.20sOSDMLIVE-%02u%02u%02u-%02u%02u%02u.LOG", dir, bcdToInt(clock.year), bcdToInt(clock.month & 0x1f),
+              bcdToInt(clock.day), bcdToInt(clock.hour), bcdToInt(clock.minute), bcdToInt(clock.second));
+    else
+      sprintf(shared.logName, "%.20sOSDMLIVE-%u.LOG", dir, counter++);
+
+    if ((logFd = iomanX_open(shared.logName, FIO_O_WRONLY | FIO_O_CREAT | FIO_O_TRUNC)) < 0) {
+      shared.logResult = logFd;
+      return;
+    }
+  }
+  if (logFd < 0) {
+    shared.logResult = -9; // EBADF
+    return;
+  }
+
+  unsigned int length = (shared.logLength > LIVESCAN_LOG_CHUNK) ? LIVESCAN_LOG_CHUNK : shared.logLength;
+  shared.logResult = iomanX_write(logFd, shared.logBuffer, length);
+  if (request & LIVESCAN_LOG_LAST) {
+    iomanX_close(logFd);
+    logFd = -1;
+  }
+}
+
 static void scanThread(void *arg) {
   while (1) {
     shared.heartbeat++;
+    unsigned int logRequest = shared.logRequest;
+    if (logRequest) {
+      writeLogChunk(logRequest);
+      shared.logRequest = 0;
+    }
     if (shared.request) {
       shared.request = 0;
       shared.status = LIVESCAN_STATUS_BUSY;
