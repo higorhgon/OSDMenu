@@ -432,6 +432,8 @@ int LoadELFFromFile(int argc, char *argv[]) {
     opts.skipArgv0 = 1;
   if (settings.gsmArgument)
     opts.eGSM = settings.gsmArgument;
+  if (settings.igrReturnPath)
+    opts.igrReturnPath = settings.igrReturnPath;
 
   return loadELF(&opts);
 }

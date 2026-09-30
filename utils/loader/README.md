@@ -16,6 +16,10 @@ This argument should begin with `-la=`, followed by one or more letters that mod
 - `E` — the `argv[argc-2]` argument contains ELF memory location to use instead of `argv[0]`
 - `A` — do not pass `argv[0]` to the target ELF and start with `argv[1]`
 - `G` — force video mode via eGSM. The `argv[argc-2]` argument contains eGSM arguments  
+- `X` — install eIGR (see `common/include/eigr.h`) before starting the ELF. The `argv[argc-2]` argument contains the
+  `mc0:`/`mc1:` path of the ELF to return to with the in-game reset. The caller must have copied the loader ELF to `0xC1000`
+- `M` — reset the IOP and load `rom0:SIO2MAN` and `rom0:MCMAN` before loading the ELF from a memory card, without
+  shutting DEV9 down. Used by eIGR to return from a game
 
 Note:
   - `D` and `N` are mutually exclusive; if both are specified, only the last one will take effect.

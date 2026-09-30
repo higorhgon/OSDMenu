@@ -52,6 +52,7 @@ typedef struct {
   char *titleID;                 // Custom title ID
   char *dkwdrvPath;              // Custom DKWDRV path
   ShutdownType dev9ShutdownType; // DEV9 Shutdown type override
+  char *igrReturnPath;           // Install eIGR (see eigr.h) and return to this ELF with the reset combo
 } launcherOptions;
 
 extern launcherOptions settings;

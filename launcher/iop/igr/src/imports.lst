@@ -11,9 +11,15 @@ loadcore_IMPORTS_start
 I_GetLoadcoreInternalData
 loadcore_IMPORTS_end
 
+sifman_IMPORTS_start
+I_sceSifSetDma
+I_sceSifDmaStat
+sifman_IMPORTS_end
+
 thbase_IMPORTS_start
 I_CreateThread
 I_StartThread
 I_SleepThread
 I_WakeupThread
+I_DelayThread
 thbase_IMPORTS_end

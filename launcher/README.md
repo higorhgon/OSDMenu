@@ -189,11 +189,20 @@ but only if `<device>:/EMBER/ember.elf` exists, since Ember loads games relative
 ```
 Ember uses the storage drivers that are already loaded, so the launcher loads the device's drivers before starting it.
 
-Ember has no in-game reset, so the launcher also loads `igr.irx` (`launcher/iop/igr`) before starting it, unless
-`psx_igr = 0`. Since Ember doesn't reset the IOP, the module keeps running during the game: it hooks sio2man's transfer
-function (export 25, like mmceman) and reads the buttons from the controller replies on ports 0 and 1, whatever library
-the game uses. Holding **L1 + L2 + R1 + R2 + L3 + R3** turns the console off (after stopping the DEV9 devices).
-Returning to OSDMenu with a combo would also need code resident on the EE, which isn't there yet.
+Ember has no in-game reset, so unless `psx_igr = 0`, the launcher adds one, in two parts (see `common/include/eigr.h`):
+- `igr.irx` (`launcher/iop/igr`), loaded before starting Ember. Since Ember doesn't reset the IOP, the module keeps
+  running during the game: it hooks sio2man's transfer function (export 25, like mmceman) and reads the buttons from
+  the controller replies on ports 0 and 1, whatever library the game uses.
+  - **L1 + L2 + R1 + R2 + START + SELECT** returns to OSDMenu: the module writes a flag to EE RAM with SIF DMA
+  - **L1 + L2 + R1 + R2 + L3 + R3** turns the console off (after stopping the DEV9 devices)
+- eIGR, in the loader (`utils/loader/src/eigr`), which the loader installs at `0xC0000` (below the memory ELFs use)
+  right before starting Ember when the launcher passes the loader flag `X`. It hooks a few syscalls games call often
+  (`WaitSema`, `SignalSema`, `SifSetDma` and `FlushCache`). When the flag is set, the syscall returns to eIGR instead
+  of the game (like Open PS2 Loader's `Exit` hook), which puts the syscalls back and runs the loader again from a copy
+  the launcher left at `0xC1000`, with the flag `M`: the loader resets the IOP, loads `rom0:SIO2MAN` and
+  `rom0:MCMAN` and starts OSDMenu with `-psx`, which reopens the "PSX >" submenu.
+  OSDMenu is started from the first of `games_return_path`, the path the patcher was started from and
+  `mc?:/BOOT/osdmenu.elf` that is on a memory card and exists.
 
 ### Config handler
 When the launcher receives a path that ends with `.CNF`, `.cnf`, `.CFG` or `.cfg`,

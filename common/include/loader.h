@@ -20,6 +20,8 @@ typedef struct {
   int ioprpSize;       // Optional: Size of the IOPRP binary in memory
   char *eGSM;          // Optional: eGSM argument
 
+  char *igrReturnPath; // Optional: install eIGR (see eigr.h) and return to this mc0:/mc1: ELF with the reset combo
+
   int skipArgv0;
   int resetIOP;                  // Indicates if IOP reset is needed (1 = yes). If used with IOPRP, it will be ignored
   ShutdownType dev9ShutdownType; // Type of shutdown to perform for DEV9

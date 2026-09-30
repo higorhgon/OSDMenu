@@ -51,7 +51,8 @@ app_gameid = 0
 # psx_device_usb = 1
 # psx_device_mx4sio = 1
 # psx_device_mmce = 1
-# Hold L1 + L2 + R1 + R2 + L3 + R3 in a PS1 game to turn the console off (default: 1)
+# In-game reset for PS1 games (default: 1): hold L1 + L2 + R1 + R2 + START + SELECT to return
+# to OSDMenu, or L1 + L2 + R1 + R2 + L3 + R3 to turn the console off
 # psx_igr = 1
 # --------------------------------------------------
 name_OSDSYS_ITEM_1 = Launch Disc

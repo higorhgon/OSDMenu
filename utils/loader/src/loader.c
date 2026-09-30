@@ -11,6 +11,8 @@
 */
 
 #include "egsm_api.h"
+#include "defaults.h"
+#include "eigr.h"
 #include "ps2logo.h"
 #include <elf.h>
 #include <iopcontrol.h>
@@ -54,6 +56,13 @@ static char *elfPath = NULL;
 static uint32_t eGSMFlags = 0;
 // Whether app argv should start with argv[1]
 static uint32_t skipArgv0 = 0;
+// eIGR return ELF path ('X')
+static char *igrReturnPath = NULL;
+// Whether the IOP is reset and its memory card drivers loaded before loading the ELF ('M')
+static int resetBeforeLoad = 0;
+
+// eIGR (src/eigr), installed right before starting the ELF
+void eigrInstall(const char *path, const char *reopen);
 
 // Resets IOP
 void resetIOP();
@@ -86,6 +95,11 @@ uint32_t parseGSMFlags(char *gsmArg);
 //   - 'I': The argv[argc-2] argument contains IOPRP image path (for HDD, the path must be a pfs: path on the same partition as the ELF file)
 //   - 'E': The argv[argc-2] argument contains ELF memory location to use instead of argv[0]
 //   - 'A': Do not pass argv[0] to the target ELF and start with argv[1]
+//   - 'X': Install eIGR (see eigr.h) before starting the ELF. The argv[argc-2] argument contains the path of the
+//          ELF to return to (a mc0:/mc1: path), started with "-psx". The launcher must have copied the loader
+//          ELF to EIGR_STASH_ADDR
+//   - 'M': Reset the IOP and load rom0:SIO2MAN and rom0:MCMAN before loading the ELF from a memory card, without
+//          shutting DEV9 down. Used by eIGR, since the game's IOP modules could still write to EE memory
 //   - 'G': Force video mode via eGSM. The argv[argc-2] argument contains eGSM arguments:
 //          The argument format is inherited from Neutrino GSM and defined as `x:y:z`, where
 //          x — Interlaced field mode, when a full height buffer is used by the game for displaying. Force video output to:
@@ -150,6 +164,14 @@ int main(int argc, char *argv[]) {
       case 'A':
         skipArgv0 = 1;
         break;
+      case 'X':
+        // Install eIGR
+        igrReturnPath = argv[argc - 2];
+        argc--;
+        break;
+      case 'M':
+        resetBeforeLoad = 1;
+        break;
       default:
       }
     }
@@ -177,6 +199,15 @@ int main(int argc, char *argv[]) {
   if (skipArgv0) {
     argc--;
     argv = &argv[1];
+  }
+
+  if (resetBeforeLoad) {
+    // Leave the game's IOP modules behind before loading anything into EE memory
+    resetIOP();
+    SifLoadFileInit();
+    SifLoadModule("rom0:SIO2MAN", 0, NULL);
+    SifLoadModule("rom0:MCMAN", 0, NULL);
+    SifLoadFileExit();
   }
 
   // Handle in-memory ELF file
@@ -255,6 +286,8 @@ int loadEmbeddedELF(int argc, char *argv[]) {
 
   if (eGSMFlags)
     enableGSM(eGSMFlags);
+  if (igrReturnPath)
+    eigrInstall(igrReturnPath, PSX_REOPEN_ARG);
 
   return ExecPS2((void *)entry, NULL, argc, argv);
 }
@@ -299,8 +332,9 @@ int loadELFFromFile(int argc, char *argv[]) {
   FlushCache(0);
   FlushCache(2);
 
-  // Shutdown DEV9
-  shutdownDEV9(dev9ShutdownType);
+  // Shutdown DEV9. fileXio isn't loaded anymore after the reset before loading
+  if (!resetBeforeLoad)
+    shutdownDEV9(dev9ShutdownType);
 
   if (!strcmp(argv[0], "rom0:PS2LOGO")) {
     // Apply PS2LOGO patch and force IOP reset
@@ -327,6 +361,8 @@ int loadELFFromFile(int argc, char *argv[]) {
 
   if (eGSMFlags)
     enableGSM(eGSMFlags);
+  if (igrReturnPath)
+    eigrInstall(igrReturnPath, PSX_REOPEN_ARG);
 
   return ExecPS2((void *)elfdata.epc, (void *)elfdata.gp, argc, argv);
 }

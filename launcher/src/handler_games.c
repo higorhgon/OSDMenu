@@ -1,5 +1,6 @@
 #include "common.h"
 #include "defaults.h"
+#include "eigr.h"
 #include "dprintf.h"
 #include "handler_games.h"
 #include "handlers.h"
@@ -887,6 +888,27 @@ static void launchGame(GamesConfig *cfg, const char *bsd, char *isoPath, const c
   launchGamesELF(argc, argv);
 }
 
+// Returns the ELF the Ember in-game reset returns to: the first of games_return_path, the path OSDMenu
+// was started from and GAMES_DEFAULT_RETURN_PATH that is on a memory card and exists, since only the ROM memory
+// card drivers are loaded after the IOP reset. Returns NULL if there's none
+static char *igrReturnPath(GamesConfig *cfg) {
+  static char path[GAMES_REL_PATH_LEN];
+  const char *candidates[] = {cfg->returnPath, cfg->patcherPath, GAMES_DEFAULT_RETURN_PATH};
+  for (int i = 0; i < 3; i++) {
+    if (!candidates[i] || strncmp(candidates[i], "mc", 2) || (strlen(candidates[i]) >= EIGR_RETURN_PATH_MAX))
+      continue;
+    snprintf(path, sizeof(path), "%s", candidates[i]);
+    for (char slot = '0'; slot < '2'; slot++) {
+      if ((candidates[i][2] == '?') || (candidates[i][2] == slot)) {
+        path[2] = slot;
+        if (!tryFile(path))
+          return path;
+      }
+    }
+  }
+  return NULL;
+}
+
 // Launches a PS1 game with Ember. gamePath is the game folder, <device>:/EMBER/games/<name>.
 // Ember takes the folder name as its only argument and finds it relative to argv[0],
 // using the storage drivers that are already loaded. Only returns on failure.
@@ -906,9 +928,14 @@ static void launchEmber(GamesConfig *cfg, const char *gamePath) {
   DeviceType mask = storageDevice(elfPath);
   if (mask && initModules(mask))
     return;
-  // Not being able to turn the console off with the controller doesn't stop the game
-  if (cfg->psxIGR && (loadIGRModule() < 0))
-    DPRINTF("PSX: failed to load igr.irx\n");
+  // In-game reset: igr.irx reads the controller, and eIGR, installed by the loader, returns to OSDMenu.
+  // Without them, the game still starts
+  if (cfg->psxIGR) {
+    if (loadIGRModule() < 0)
+      DPRINTF("PSX: failed to load igr.irx\n");
+    else
+      settings.igrReturnPath = igrReturnPath(cfg);
+  }
 
   char *argv[] = {elfPath, folder};
   launchGamesELF(2, argv);
@@ -1420,6 +1447,7 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
   }
 
   if (modeType == 'g') {
+    cfg->patcherPath = patcherPath;
     markGamePlayed(cfg, atoi(mode + 2), sortRecent);
     int res = launchCachedGame(cfg, atoi(mode + 2));
     sleep(5);

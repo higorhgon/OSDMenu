@@ -6,6 +6,7 @@
 #include "cdvdman.h"
 #include "intrman.h"
 #include "loadcore.h"
+#include "sifman.h"
 #include "sio2man.h"
 #include "thbase.h"
 

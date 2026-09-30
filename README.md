@@ -240,7 +240,8 @@ games_neutrino_path = mmce0:/APPS/neutrino/neutrino.elf
 **PS1 games with Ember:**
 ```ini
 psx_device_mmce = 1
-# Hold L1 + L2 + R1 + R2 + L3 + R3 in a game to turn the console off (default: 1)
+# In-game reset (default: 1): hold L1 + L2 + R1 + R2 + START + SELECT in a game to return
+# to OSDMenu, or L1 + L2 + R1 + R2 + L3 + R3 to turn the console off
 psx_igr = 1
 ```
 

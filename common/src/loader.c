@@ -1,5 +1,6 @@
 #include "loader.h"
 #include "dprintf.h"
+#include "eigr.h"
 #include <elf.h>
 #include <errno.h>
 #include <iopcontrol.h>
@@ -16,7 +17,7 @@
 extern uint8_t loader_elf[];
 extern int size_loader_elf;
 
-static char loaderArg[16] = "-la="; // Up to R, A, N/D, I, E, G
+static char loaderArg[16] = "-la="; // Up to R, A, N/D, I, E, G, X
 static char elfMemArg[22] = {0};
 static char ioprpMemArg[22] = {0};
 
@@ -97,6 +98,14 @@ int loadELF(LoadOptions *options) {
     argc = (argc == 0) ? 2 : argc + 1;
   }
 
+  // eIGR runs the loader again from a copy, since the loader's memory isn't kept while the game runs
+  if (options->igrReturnPath && (size_loader_elf <= EIGR_STASH_MAX)) {
+    memcpy((void *)EIGR_STASH_ADDR, loader_elf, size_loader_elf);
+    loaderArg[argPos++] = 'X';
+    argc = (argc == 0) ? 2 : argc + 1;
+  } else
+    options->igrReturnPath = NULL;
+
   char **argv = options->argv;
   if (argc != 0) {
     argv = malloc((argc + options->argc) * sizeof(char *));
@@ -105,9 +114,13 @@ int loadELF(LoadOptions *options) {
       argv[i] = options->argv[i];
 
     // Add loader arguments. The loader takes them from the one right before "-la=" backwards,
-    // in the order of the letters (I, E, G), so they're added in the reverse order
+    // in the order of the letters (I, E, G, X), so they're added in the reverse order
     int argvOffset = argc;
     argc += options->argc;
+
+    // eIGR return path
+    if (options->igrReturnPath)
+      argv[argc - (argvOffset--)] = options->igrReturnPath;
 
     // GSM argument
     if (options->eGSM)

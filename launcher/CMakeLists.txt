@@ -86,7 +86,7 @@ if(LAUNCHER_GAMES_MENU)
   # Button combos for the PS1 games launched via Ember (psx_igr)
   set(IGR_IRX "${CMAKE_CURRENT_SOURCE_DIR}/iop/igr/igr.irx")
   file(GLOB IGR_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/iop/igr/src/*" "${CMAKE_CURRENT_SOURCE_DIR}/iop/igr/src/include/*"
-       "${CMAKE_CURRENT_SOURCE_DIR}/iop/igr/Makefile")
+       "${CMAKE_CURRENT_SOURCE_DIR}/iop/igr/Makefile" "${CMAKE_SOURCE_DIR}/common/include/eigr.h")
   add_custom_command(
         OUTPUT ${IGR_IRX}
         COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_CURRENT_SOURCE_DIR}/iop/igr" ${CMAKE_MAKE_PROGRAM}

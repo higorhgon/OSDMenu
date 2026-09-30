@@ -18,11 +18,13 @@ ENTRY(__start);
 MEMORY {
 	kram	: ORIGIN = 0x0080000, LENGTH = 0x1500  /* 0x00080000 - 0x00081500: BIOS unused memory, used by updates */
 	bram	: ORIGIN = 0x0084000, LENGTH = 0x1c000 /* 0x00084000 - 0x00100000: BIOS unused memory */
+	iram	: ORIGIN = 0x00C0000, LENGTH = 0x1000  /* 0x000C0000 - 0x000C1000: eIGR (EIGR_BASE in eigr.h), above the loader and below its stack */
 }
 
 PHDRS {
   egsm PT_LOAD; # eGSM program header
   text PT_LOAD; # Main program header
+  eigr PT_LOAD; # eIGR program header
 }
 
 SECTIONS {
@@ -40,6 +42,25 @@ SECTIONS {
 		KEEP(*egsm*.obj(.bss))
 		KEEP(*egsm*.obj(.bss.*))
 	} >kram
+
+	# eIGR code and data, starting with the 16-byte flag igr.irx writes (EIGR_FLAG_ADDR).
+	# Everything is in one section, so the zeroed data is in the file too and is copied with it
+	.eigr : {
+		. = . + 16;
+		KEEP(*eigr*.obj(.text))
+		KEEP(*eigr*.obj(.text.*))
+		KEEP(*eigr*.obj(.rodata))
+		KEEP(*eigr*.obj(.rodata.*))
+		KEEP(*eigr*.obj(.data))
+		KEEP(*eigr*.obj(.data.*))
+		KEEP(*eigr*.obj(.sdata))
+		KEEP(*eigr*.obj(.sdata.*))
+		KEEP(*eigr*.obj(.sbss))
+		KEEP(*eigr*.obj(.sbss.*))
+		KEEP(*eigr*.obj(.bss))
+		KEEP(*eigr*.obj(.bss.*))
+		LONG(0)
+	} >iram :eigr
 
 	.text : {
 		_ftext = . ;

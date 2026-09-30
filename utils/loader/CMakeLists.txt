@@ -7,7 +7,13 @@ set(SOURCES
     src/ps2logo.c
     src/egsm/egsm.c
     src/egsm/ee_exception_l2.S
+    src/eigr/eigr.c
+    src/eigr/eigr_asm.S
 )
+
+# eIGR is copied over itself and runs while the rest of the loader is overwritten,
+# so it must not call memcpy or other library functions
+set_source_files_properties(src/eigr/eigr.c PROPERTIES COMPILE_OPTIONS "-fno-builtin;-fno-tree-loop-distribute-patterns")
 
 if(DISABLE_IOPRP)
   message(NOTICE "ELF Loader IOPRP support will be disabled")
@@ -17,6 +23,7 @@ endif()
 add_executable(loader ${SOURCES})
 target_include_directories(loader PRIVATE
     include
+    ${CMAKE_SOURCE_DIR}/common/include
     $ENV{PS2SDK}/ee/include
     $ENV{PS2SDK}/common/include
 )
