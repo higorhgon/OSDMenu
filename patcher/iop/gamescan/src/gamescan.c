@@ -292,6 +292,9 @@ static int writeCache(void) {
 // the ID in the second), turning each address into a thread ID the same way threadman does
 // and checking it with ReferThreadStatus(). Only threads whose entry point is in the code of a module
 // that uses the SIO2 are suspended, so a false match can't be suspended.
+// In the ROM threadman (checked on ROM 2.30), the tag is 8 bytes into the control block, after the
+// queue links, and thread IDs point to the start of the block. PS2SDK's threadman puts the tag first,
+// so that's tried when the ROM layout doesn't match.
 #define TAG_THREAD 0x7f01
 #define THREAD_HANDLE(addr, id) ((int)(((addr) << 5) | (((id) & 0x3f) << 1) | 1))
 
@@ -356,9 +359,14 @@ static void listThreads(int suspend) {
       continue;
     shared.tagCount++;
 
-    int handle = THREAD_HANDLE(addr, word >> 16);
+    int handle = THREAD_HANDLE(addr - 8, word >> 16);
     memset(&info, 0, sizeof(info));
     int result = ReferThreadStatus(handle, &info);
+    if (result != 0) {
+      handle = THREAD_HANDLE(addr, word >> 16);
+      memset(&info, 0, sizeof(info));
+      result = ReferThreadStatus(handle, &info);
+    }
     unsigned int status = info.status;
     if (shared.tagCount <= LIVESCAN_MAX_TAGS) {
       LiveScanTag *tag = &shared.tags[shared.tagCount - 1];
