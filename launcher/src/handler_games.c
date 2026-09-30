@@ -69,6 +69,7 @@ typedef struct {
   GameMediaType media;
   char id[GAMES_ID_LEN];            // Title ID (e.g. "SLUS_202.12"), empty if unknown
   uint32_t played;                  // "played" counter carried over from the previous cache
+  int fav;                          // Favorite, carried over from the previous cache
 } GameEntry;
 
 typedef struct {
@@ -1011,8 +1012,10 @@ static int writeGamesCache(GamesConfig *cfg, int sortRecent) {
   CacheLine *lines;
   int lineCount;
   char *oldCache = readGamesCache(path, &lines, &lineCount);
-  for (int i = 0; i < gameCount; i++)
+  for (int i = 0; i < gameCount; i++) {
     gameList[i].played = 0;
+    gameList[i].fav = 0;
+  }
   if (oldCache) {
     const char *pathKey = cachePathKey(cfg);
     const char *gamePath = NULL;
@@ -1028,6 +1031,13 @@ static int writeGamesCache(GamesConfig *cfg, int sortRecent) {
         for (int j = 0; j < gameCount; j++) {
           if (!strcmp(gameList[j].path, gamePath)) {
             gameList[j].played = strtoul(lines[i].value, NULL, 10);
+            break;
+          }
+        }
+      } else if (!strcmp(lines[i].key, "fav") && gamePath && atoi(lines[i].value)) {
+        for (int j = 0; j < gameCount; j++) {
+          if (!strcmp(gameList[j].path, gamePath)) {
+            gameList[j].fav = 1;
             break;
           }
         }
@@ -1057,11 +1067,67 @@ static int writeGamesCache(GamesConfig *cfg, int sortRecent) {
       len = sizeof(line) - 1;
     if (gameList[i].played && (len < (int)sizeof(line) - 24))
       len += snprintf(&line[len], sizeof(line) - len, "played = %u\n", (unsigned int)gameList[i].played);
+    if (gameList[i].fav && (len < (int)sizeof(line) - 12))
+      len += snprintf(&line[len], sizeof(line) - len, "fav = 1\n");
     if (write(fd, line, len) != len)
       res = -EIO;
   }
   close(fd);
   return res;
+}
+
+// Returns 1 if game idx is set in favMask, the hex mask the patcher passes after 'f' in the mode:
+// one digit per four games by cache index, bit 0 for the first one
+static int maskHasGame(const char *favMask, int idx) {
+  if ((idx / 4) >= (int)strlen(favMask))
+    return 0;
+  char c = favMask[idx / 4];
+  int nibble = isdigit((int)c) ? (c - '0') : ((tolower((int)c) >= 'a') && (tolower((int)c) <= 'f')) ? (tolower((int)c) - 'a' + 10) : 0;
+  return (nibble >> (idx % 4)) & 1;
+}
+
+// Replaces the "fav" lines of the cache with the favorites in favMask, toggled in the submenu
+// and not saved yet. A failure only loses the favorites, so it's not reported
+static void applyFavorites(GamesConfig *cfg, const char *favMask) {
+  char path[32];
+  getGamesCachePath(cfg, path);
+
+  CacheLine *lines;
+  int lineCount;
+  char *cache = readGamesCache(path, &lines, &lineCount);
+  if (!cache)
+    return;
+
+  int outSize = 32;
+  for (int i = 0; i < lineCount; i++)
+    outSize += strlen(lines[i].key) + strlen(lines[i].value) + 4 + 8; // Room for a "fav = 1" line per game
+
+  char *out = malloc(outSize);
+  if (out) {
+    int len = 0;
+    int current = -1;
+    for (int i = 0; i < lineCount; i++) {
+      if (!strcmp(lines[i].key, "fav"))
+        continue;
+      if (!strcmp(lines[i].key, "game")) {
+        if ((current >= 0) && maskHasGame(favMask, current))
+          len += sprintf(&out[len], "fav = 1\n");
+        current++;
+      }
+      len += sprintf(&out[len], "%s = %s\n", lines[i].key, lines[i].value);
+    }
+    if ((current >= 0) && maskHasGame(favMask, current))
+      len += sprintf(&out[len], "fav = 1\n");
+
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd >= 0) {
+      write(fd, out, len);
+      close(fd);
+    }
+    free(out);
+  }
+  free(lines);
+  free(cache);
 }
 
 // Marks game idx as the most recently played one and saves the sort order in the cache.
@@ -1320,7 +1386,8 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
   const char *mode = strrchr(arg, ':');
   char modeType = (mode && ((mode[1] == 'g') || (mode[1] == 's'))) ? mode[1] : '\0';
 
-  // The mode ends with the submenu's sort order: 'r' (recently played) or 'n' (name)
+  // The mode ends with the submenu's sort order: 'r' (recently played) or 'n' (name),
+  // and the favorites that weren't saved yet: 'f' and a hex mask by cache index
   int sortRecent = -1;
   if (modeType) {
     const char *sort = mode + 2;
@@ -1330,6 +1397,10 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
       sortRecent = 1;
     else if (*sort == 'n')
       sortRecent = 0;
+    if (*sort)
+      sort++;
+    if (*sort == 'f')
+      applyFavorites(cfg, sort + 1);
   }
 
   if ((cfg->kind == GamesKind_PS2) && (modeType != 's') && !cfg->neutrinoPath && !(cfg->oplPath && (cfg->useOPL || cfg->useSMB))) {

@@ -100,7 +100,10 @@ reopen the games submenu right away.
 Without a mode (HOSDMenu), the launcher scans and shows its own full-screen list instead.
 
 The mode ends with the submenu's sort order, `r` (most recently played) or `n` (name), which is saved as the
-`sort` line of the cache. Launching a game also gives it a `played` counter higher than any other in the cache,
+`sort` line of the cache. When favorites were toggled in the submenu and not saved yet, it's followed by `f` and a
+hex mask of the favorites by cache index (one digit per four games, bit 0 for the first one, e.g. `f122` for games
+0, 5 and 9), which replace the `fav = 1` lines of the cache before scanning or launching. Rescanning keeps the
+favorites of the games that are still found. Launching a game also gives it a `played` counter higher than any other in the cache,
 and rescanning keeps the counters of the games that are still found.
 
 For each enabled device (`games_device_usb`, `games_device_mx4sio`, `games_device_mmce`), it scans two folders

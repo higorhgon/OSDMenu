@@ -58,7 +58,7 @@ static int customItemCount(void) {
 // Launches the launcher for the OSDMENU.CNF entry with the given index.
 // suffix is appended to the osdm path and interpreted by the launcher's games handler
 static void launchMenuItem(int idx, const char *suffix) {
-  char item[128] = {0};
+  char item[256] = {0};
 #ifdef EMBED_CNF
   // osdm:a<8-char address>:<8-char CNF size>:<3-char idx>
   // Relocate the CNF file to the memory unused by the launcher code
@@ -81,9 +81,30 @@ static void launchMenuItem(int idx, const char *suffix) {
 // Launches the submenu entry in the given launcher mode (":s" or ":g<N>").
 // The patcher path is appended after '|' so the launcher can return to OSDMenu afterwards
 static void launchGamesMode(GamesSubmenu *menu, const char *mode) {
-  char suffix[16 + sizeof(settings.bootPath)];
+  // Favorites that weren't saved yet follow as 'f' and a hex mask by cache index,
+  // one digit per four games (bit 0 for the first one), with the trailing zeros left out
+  char favorites[2 + CUSTOM_ITEMS / 4] = "";
+  if (menu->favDirty) {
+    int digits = 0;
+    favorites[0] = 'f';
+    for (int i = 0; i < menu->count; i += 4) {
+      int nibble = 0;
+      for (int b = 0; (b < 4) && (i + b < menu->count); b++)
+        if (menu->fav[i + b])
+          nibble |= 1 << b;
+      favorites[1 + i / 4] = "0123456789abcdef"[nibble];
+      if (nibble)
+        digits = 1 + i / 4;
+    }
+    favorites[1 + (digits ? digits : 1)] = '\0';
+    if (!digits)
+      favorites[1] = '0';
+  }
+
+  char suffix[16 + sizeof(favorites) + sizeof(settings.bootPath)];
   // The sort order ('r'ecent or 'n'ame) follows the mode so the launcher saves it in the cache
-  snprintf(suffix, sizeof(suffix), "%s%c%s%s", mode, menu->sortRecent ? 'r' : 'n', settings.bootPath[0] ? "|" : "", settings.bootPath);
+  snprintf(suffix, sizeof(suffix), "%s%c%s%s%s", mode, menu->sortRecent ? 'r' : 'n', favorites, settings.bootPath[0] ? "|" : "",
+           settings.bootPath);
   launchMenuItem(menu->itemIdx, suffix);
 }
 
@@ -104,19 +125,22 @@ static void setMenuEntry(int pos, int slot) {
 static void closeSubmenu(void);
 
 // Fills menu->order: games in cache order (by name), or most recently played first,
-// followed by the games that were never played in name order
+// followed by the games that were never played in name order. Favorites come first in both
 static void sortGames(GamesSubmenu *menu) {
   for (int i = 0; i < menu->count; i++)
     menu->order[i] = i;
-  if (!menu->sortRecent)
-    return;
 
-  // Stable insertion sort by the "played" counter, highest first
+  // Stable insertion sort by favorite and, when sorting by recently played, by the "played" counter, highest first
   for (int i = 1; i < menu->count; i++) {
     uint8_t idx = menu->order[i];
     int j = i;
-    while ((j > 0) && (menu->played[menu->order[j - 1]] < menu->played[idx])) {
-      menu->order[j] = menu->order[j - 1];
+    while (j > 0) {
+      uint8_t prev = menu->order[j - 1];
+      int before = (menu->fav[idx] > menu->fav[prev]) ||
+                   ((menu->fav[idx] == menu->fav[prev]) && menu->sortRecent && (menu->played[prev] < menu->played[idx]));
+      if (!before)
+        break;
+      menu->order[j] = prev;
       j--;
     }
     menu->order[j] = idx;
@@ -146,14 +170,15 @@ static void openGamesMenu(GamesSubmenu *menu) {
   activeMenu = menu;
 }
 
-// Switches the active submenu between sorting by name and by most recently played,
-// keeping the cursor on the same game
-static void toggleGamesSort(void) {
-  GamesSubmenu *menu = activeMenu;
+// Returns the cache index of the game under the cursor in the active submenu, or -1
+static int selectedGame(void) {
   int pos = (int)menuInfo->currentEntry - 3;
-  int selected = ((pos >= 0) && (pos < menu->count)) ? menu->order[pos] : -1;
+  return ((pos >= 0) && (pos < activeMenu->count)) ? activeMenu->order[pos] : -1;
+}
 
-  menu->sortRecent = !menu->sortRecent;
+// Sorts and shows the active submenu again, keeping the cursor on the game with cache index selected
+static void resortGames(int selected) {
+  GamesSubmenu *menu = activeMenu;
   sortGames(menu);
   uint32_t cursor = menuInfo->currentEntry;
   showGamesEntries(menu);
@@ -165,6 +190,36 @@ static void toggleGamesSort(void) {
       break;
     }
   }
+}
+
+// Switches the active submenu between sorting by name and by most recently played,
+// keeping the cursor on the same game
+static void toggleGamesSort(void) {
+  int selected = selectedGame();
+  activeMenu->sortRecent = !activeMenu->sortRecent;
+  resortGames(selected);
+}
+
+#ifdef GAMES_MENU
+static void saveLiveScanFavorites(GamesSubmenu *menu);
+#endif
+
+// Adds the game under the cursor to the favorites or removes it, keeping the cursor on it.
+// Favorites are saved right away by gamescan.irx when the live scan loaded it, or else
+// passed to the launcher the next time a game is launched or the list is refreshed
+static void toggleFavorite(void) {
+  GamesSubmenu *menu = activeMenu;
+  int selected = selectedGame();
+  if (selected < 0)
+    return;
+
+  menu->fav[selected] = !menu->fav[selected];
+  menu->favDirty = 1;
+  markFavorites(menu);
+  resortGames(selected);
+#ifdef GAMES_MENU
+  saveLiveScanFavorites(menu);
+#endif
 }
 
 // Moves the cursor a page (OSDSYS_num_displayed_items) up or down within the submenu
@@ -180,14 +235,16 @@ static void pageGamesMenu(int direction) {
   menuInfo->currentEntry = entry;
 }
 
-// Handles the submenu buttons OSDSYS doesn't: Circle/Triangle to go back,
-// Square to change the sort order of a games submenu, Left/Right to move a page
+// Handles the submenu buttons OSDSYS doesn't: Circle (Triangle in menu groups) to go back,
+// Square to change the sort order and Triangle to add a favorite in a games submenu, Left/Right to move a page
 static void handleSubmenuButtons(void) {
   uint16_t pressed = padNewPresses();
   if (!pressed)
     return;
 
-  if (pressed & padBackButtons())
+  if ((pressed & PADB_TRIANGLE) && activeMenu)
+    toggleFavorite();
+  else if (pressed & padBackButtons() & (activeMenu ? ~PADB_TRIANGLE : 0xffff))
     closeSubmenu();
   else if ((pressed & PADB_SQUARE) && activeMenu)
     toggleGamesSort();
@@ -228,7 +285,7 @@ static int liveScanFrames = 0;
 static uint32_t liveScanHeartbeat = 0;
 static uint32_t liveScanRequest = 0; // LIVESCAN_SCAN or LIVESCAN_LIST
 static uint32_t liveScanStage = 0;   // Last LIVESCAN_STAGE_* shown
-#define liveScanMenu (&settings.submenus[SUBMENU_GAMES]) // Only PS2 games are scanned live
+static GamesSubmenu *liveScanMenu = &settings.submenus[SUBMENU_GAMES]; // Submenu being scanned
 
 // IOP RAM is accessed with 32-bit uncached reads and writes only.
 // LIVESCAN_IOP_RAM is a kernel segment address, so like PS2SDK's smem_read()/smem_write(),
@@ -565,6 +622,8 @@ static void diagLine(GamesSubmenu *menu, const char *fmt, ...) {
   if (diagLines < menu->max) {
     strcpy(settings.menuItemName[menu->base + diagLines], line);
     menu->played[diagLines] = 0;
+    menu->fav[diagLines] = 0;
+    menu->favDirty = 0; // The entries aren't games anymore
     diagLines++;
   }
 }
@@ -880,14 +939,46 @@ static const char *liveScanErrorName(int result) {
 }
 
 // Sends the request (LIVESCAN_SCAN or LIVESCAN_LIST) to gamescan.irx and shows its progress until it's done
+// Whether the live scan can scan the submenu's games: only MMCE devices are supported
+static int liveScanUsesMMCE(GamesSubmenu *menu) {
+  return (menu == &settings.submenus[SUBMENU_PSX]) ? settings.psxUseMMCE : settings.gamesUseMMCE;
+}
+
+// Writes the submenu's cache path and kind, and its favorites by cache index
+static void setLiveScanTarget(GamesSubmenu *menu) {
+  int psx = (menu == &settings.submenus[SUBMENU_PSX]);
+  char cachePath[32];
+  strcpy(cachePath, psx ? PSX_CACHE_PATH : GAMES_CACHE_PATH);
+  if (settings.mcSlot == 1)
+    cachePath[2] = '1';
+  iopWriteString(LIVESCAN_FIELD(cachePath), cachePath, LIVESCAN_PATH_LEN);
+  iopWrite(LIVESCAN_FIELD(kind), psx ? LIVESCAN_KIND_PSX : LIVESCAN_KIND_PS2);
+  for (int word = 0; word < LIVESCAN_MAX_GAMES / 32; word++) {
+    uint32_t bits = 0;
+    for (int b = 0; b < 32; b++)
+      if ((word * 32 + b < menu->count) && menu->fav[word * 32 + b])
+        bits |= 1u << b;
+    iopWrite(LIVESCAN_FIELD(fav) + word * 4, bits);
+  }
+  iopWrite(LIVESCAN_FIELD(favInput), menu->favDirty);
+}
+
+// Saves the favorites of the submenu with gamescan.irx when it's loaded, without waiting for it.
+// When it's busy or not loaded, they stay unsaved and are saved by the next scan or launcher call
+static void saveLiveScanFavorites(GamesSubmenu *menu) {
+  if (!liveScanAddr || liveScanActive || liveScanDisabled || iopRead(LIVESCAN_FIELD(request)) ||
+      (iopRead(LIVESCAN_FIELD(status)) == LIVESCAN_STATUS_BUSY))
+    return;
+  setLiveScanTarget(menu);
+  iopWrite(LIVESCAN_FIELD(request), LIVESCAN_SAVE_FAV);
+  menu->favDirty = 0;
+}
+
 static void requestLiveScan(GamesSubmenu *menu, uint32_t request) {
   iopWrite(LIVESCAN_FIELD(devices), LIVESCAN_DEV_MMCE);
   iopWriteString(LIVESCAN_FIELD(cdFolder), settings.gamesCdFolder, LIVESCAN_FOLDER_LEN);
   iopWriteString(LIVESCAN_FIELD(dvdFolder), settings.gamesDvdFolder, LIVESCAN_FOLDER_LEN);
-  char cachePath[] = GAMES_CACHE_PATH;
-  if (settings.mcSlot == 1)
-    cachePath[2] = '1';
-  iopWriteString(LIVESCAN_FIELD(cachePath), cachePath, LIVESCAN_PATH_LEN);
+  setLiveScanTarget(menu);
   char mmcePath[] = LIVESCAN_IRX_MMCEMAN;
   mmcePath[2] = (settings.mcSlot == 1) ? '1' : '0';
   iopWriteString(LIVESCAN_FIELD(mmcePath), mmcePath, LIVESCAN_PATH_LEN);
@@ -911,8 +1002,9 @@ static void requestLiveScan(GamesSubmenu *menu, uint32_t request) {
 // Starts a live scan of the menu and shows "Scanning..." until it's done.
 // Returns 0 if the live scan is not enabled for it, so the launcher scans instead
 static int startLiveScan(GamesSubmenu *menu) {
-  if ((menu != liveScanMenu) || !settings.gamesLiveScan || liveScanDisabled || !settings.gamesUseMMCE)
+  if (!settings.gamesLiveScan || liveScanDisabled || liveScanActive || !liveScanUsesMMCE(menu))
     return 0;
+  liveScanMenu = menu;
 
   if (!menu->cacheLoaded) {
     menu->count = 0;
@@ -1028,17 +1120,23 @@ static void pollLiveScan(void) {
     // The cache the launcher reads wasn't updated, so the list can't be launched from
     snprintf(label, sizeof(label), "Refresh list (live scan: %s %d)", liveScanErrorName(result), result);
     count = 0;
+    menu->favDirty = 0; // The favorites mask is by cache index, which doesn't match an empty list
   } else if (iopRead(LIVESCAN_FIELD(watchdogResumed)))
     strcpy(label, "Refresh list (live scan: controller resumed by the watchdog)");
 
-  // gamescan.irx doesn't keep the "played" counters, so the list is shown by name
+  // gamescan.irx keeps the "played" counters and favorites of the games that are still there
   for (int i = 0; i < count; i++) {
     iopReadString(LIVESCAN_FIELD(names) + i * LIVESCAN_NAME_LEN, settings.menuItemName[menu->base + i], LIVESCAN_NAME_LEN);
-    menu->played[i] = 0;
+    menu->played[i] = iopRead(LIVESCAN_FIELD(played) + i * 4);
+    menu->fav[i] = (iopRead(LIVESCAN_FIELD(fav) + (i / 32) * 4) >> (i % 32)) & 1;
   }
   menu->count = count;
-  if (result >= 0)
+  if (result >= 0) {
     menu->cacheLoaded = 1;
+    menu->favDirty = 0;
+    markFavorites(menu);
+    setSubmenuEntryLabel(menu);
+  }
 
   if (settings.gamesLiveScan == 2) {
     // Log of the scan: its result, and the threads after it
@@ -1517,7 +1615,8 @@ void getButtonsPanelType(int type) {
 }
 
 #ifndef HOSD
-// Button prompts of the games submenus: "Back" replaces "Version", and "Sort" is added in between.
+// Button prompts of the games submenus: "Back" replaces "Version", and the sort order (Square)
+// and "Fav" (Triangle) are added in between.
 // OSDSYS only draws the Enter (Cross, or Circle on Japanese consoles) and Version (Triangle) icons
 // in the main menu, so Circle and Square are derived from Version. The icon types are Square,
 // Triangle, Cross, Circle in that order (seen on ROM 2.30: 2, 3, 4, 5).
@@ -1559,8 +1658,9 @@ static void deriveSubmenuIcons(void) {
 // Returns 1 when the main menu button panel shows a games submenu
 static int showSubmenuPrompts(void) { return (ButtonsPanel_Type == MAINMENU_PANEL) && ((activeMenu && !liveScanActive) || activeGroup); }
 
-// X coordinate of the "Sort" prompt, between Enter and Back
-static int sortPromptX(void) { return (settings.enterX + settings.versionX) / 2; }
+// X coordinates of the sort and "Fav" prompts: Enter, sort, "Fav" and Back are evenly spaced
+static int sortPromptX(void) { return settings.enterX + (settings.versionX - settings.enterX) / 3; }
+static int favPromptX(void) { return settings.enterX + (settings.versionX - settings.enterX) * 2 / 3; }
 #endif
 
 // drawNonselectableEntryLeft() is called for all items less the last
@@ -1605,7 +1705,9 @@ void drawNonselectableEntryRight(int X, int Y, uint32_t *color, int alpha, const
           len += snprintf(&debug[len], sizeof(debug) - len, "%s%d", i ? "," : "", seenIconTypes[i]);
         DrawNonSelectableItem(settings.enterX, settings.versionY - 18, color, alpha, debug);
       }
-      DrawNonSelectableItem(sortPromptX() + 28, settings.versionY, color, alpha, activeMenu->sortRecent ? "Sort: [Recent]" : "Sort: [A-Z]");
+      // Short texts, since the four prompts share the space of two
+      DrawNonSelectableItem(sortPromptX() + 28, settings.versionY, color, alpha, activeMenu->sortRecent ? "Recent" : "A-Z");
+      DrawNonSelectableItem(favPromptX() + 28, settings.versionY, color, alpha, "Fav");
       DrawNonSelectableItem(settings.versionX + 28, settings.versionY, color, alpha, "Back");
       return;
     }
@@ -1658,8 +1760,10 @@ void drawIconRight(int type, int X, int Y, int alpha) {
       deriveSubmenuIcons();
     }
     if (showSubmenuPrompts()) {
-      if ((sortIconType >= 0) && activeMenu)
+      if ((sortIconType >= 0) && activeMenu) {
         DrawIcon(sortIconType, sortPromptX(), settings.versionY, alpha);
+        DrawIcon(versionIconType, favPromptX(), settings.versionY, alpha); // Triangle
+      }
       if (backIconType >= 0)
         DrawIcon(backIconType, settings.versionX, settings.versionY, alpha);
       return;

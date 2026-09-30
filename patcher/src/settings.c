@@ -362,6 +362,10 @@ int loadConfig(void) {
     if (!strncmp(name, "psx_device_", 11)) {
       if (atoi(value))
         psxEnabled = 1;
+#ifndef HOSD
+      if (!strcmp(name, "psx_device_mmce"))
+        settings.psxUseMMCE = atoi(value);
+#endif
       continue;
     }
 #ifndef HOSD
@@ -564,6 +568,11 @@ static void loadSubmenuCache(GamesSubmenu *menu, const char *cachePath) {
         menu->played[menu->count - 1] = strtoul(value, NULL, 10);
       continue;
     }
+    if (!strcmp(name, "fav")) {
+      if (inList)
+        menu->fav[menu->count - 1] = (atoi(value) != 0);
+      continue;
+    }
     if (strcmp(name, "game"))
       continue;
 
@@ -572,6 +581,7 @@ static void loadSubmenuCache(GamesSubmenu *menu, const char *cachePath) {
       continue;
     strncpy(settings.menuItemName[menu->base + menu->count], value, NAME_LEN - 1);
     menu->played[menu->count] = 0;
+    menu->fav[menu->count] = 0;
     menu->count++;
   }
   memset(cnfStart, 0, cnfSize);
@@ -579,6 +589,34 @@ static void loadSubmenuCache(GamesSubmenu *menu, const char *cachePath) {
   strcpy(settings.menuItemName[menu->base + menu->count], "< Back");
   strcpy(settings.menuItemName[menu->base + menu->count + 1], "Refresh list");
   menu->cacheLoaded = 1;
+  markFavorites(menu);
+}
+
+void markFavorites(GamesSubmenu *menu) {
+  int markLen = strlen(FAVORITE_MARK);
+  for (int i = 0; i < menu->count; i++) {
+    char *name = settings.menuItemName[menu->base + i];
+    int marked = !strncmp(name, FAVORITE_MARK, markLen);
+    if (menu->fav[i] && !marked) {
+      memmove(&name[markLen], name, NAME_LEN - markLen - 1);
+      memcpy(name, FAVORITE_MARK, markLen);
+      name[NAME_LEN - 1] = '\0';
+    } else if (!menu->fav[i] && marked)
+      memmove(name, &name[markLen], NAME_LEN - markLen);
+  }
+}
+
+void setSubmenuEntryLabel(GamesSubmenu *menu) {
+  const char *title = (menu == &settings.submenus[SUBMENU_PSX]) ? "PSX" : "Games";
+  for (int i = 0; i < settings.menuItemCount; i++) {
+    if (settings.menuItemIdx[i] != menu->itemIdx)
+      continue;
+    if (menu->cacheLoaded)
+      snprintf(settings.menuItemName[i], NAME_LEN, "%s (%d) >", title, menu->count);
+    else
+      snprintf(settings.menuItemName[i], NAME_LEN, "%s >", title);
+    return;
+  }
 }
 
 // Splits the menuItemName slots left after the regular items between the enabled submenus
@@ -610,6 +648,7 @@ void loadGamesCache(void) {
     menu->max = regionSize - 2;
     base += regionSize;
     loadSubmenuCache(menu, cachePaths[i]);
+    setSubmenuEntryLabel(menu);
   }
 }
 #endif
@@ -668,6 +707,7 @@ void initConfig(void) {
     settings.submenus[i].count = 0;
     settings.submenus[i].cacheLoaded = 0;
     settings.submenus[i].sortRecent = 0;
+    settings.submenus[i].favDirty = 0;
   }
   settings.reopenSubmenu = 0;
   settings.buttonDebug = 0;
@@ -678,6 +718,7 @@ void initConfig(void) {
   settings.liveScanBoot = LIVESCAN_BOOT_NOT_LOADED;
   settings.liveScanLoader = 0;
   settings.gamesUseMMCE = 0;
+  settings.psxUseMMCE = 0;
   strcpy(settings.gamesCdFolder, "CD");
   strcpy(settings.gamesDvdFolder, "DVD");
 #endif

@@ -11,6 +11,7 @@
 // So while mmceman runs, gamescan.irx holds sio2man's transfer lock, and mmceman is read into
 // IOP RAM before, since the memory card can't be read while the lock is held.
 #include "irx_imports.h"
+#include "defaults.h"
 #include "livescan.h"
 #include <iox_stat.h>
 
@@ -241,6 +242,59 @@ static void scanFolder(const char *mountpoint, const char *folder) {
   iomanX_dclose(dfd);
 }
 
+// Returns 1 if dirPath contains a *.cue file
+static int hasCueFile(const char *dirPath) {
+  int dfd = iomanX_dopen(dirPath);
+  if (dfd < 0)
+    return 0;
+
+  int found = 0;
+  while (!found && (iomanX_dread(dfd, &subDirent) > 0)) {
+    if (FIO_S_ISDIR(subDirent.stat.mode))
+      continue;
+    const char *ext = strrchr(subDirent.name, '.');
+    found = ext && !strCaseCmp(ext, ".cue");
+  }
+  iomanX_dclose(dfd);
+  return found;
+}
+
+// Scans <mountpoint>/EMBER/games for PS1 games like the launcher: subfolders with a *.cue file inside,
+// only when <mountpoint>/EMBER/ember.elf exists. The folder is the game's name and path
+static void scanEmberFolder(const char *mountpoint) {
+  char path[GAME_PATH_LEN];
+  sprintf(path, "%s/" PSX_EMBER_FOLDER "/" PSX_EMBER_ELF, mountpoint);
+  int fd = iomanX_open(path, FIO_O_RDONLY);
+  if (fd < 0)
+    return;
+  iomanX_close(fd);
+
+  char gamesPath[GAME_PATH_LEN];
+  sprintf(gamesPath, "%s/" PSX_EMBER_FOLDER "/games", mountpoint);
+  int dfd = iomanX_dopen(gamesPath);
+  if (dfd < 0)
+    return;
+
+  while ((gameCount < LIVESCAN_MAX_GAMES) && (iomanX_dread(dfd, &dirent) > 0)) {
+    if (!FIO_S_ISDIR(dirent.stat.mode) || (dirent.name[0] == '.'))
+      continue;
+    if ((strlen(gamesPath) + strlen(dirent.name) + 2) > GAME_PATH_LEN)
+      continue; // A truncated folder name wouldn't launch
+    strcpy(path, gamesPath);
+    strcpy(&path[strlen(path)], "/");
+    strcpy(&path[strlen(path)], dirent.name);
+    if (!hasCueFile(path))
+      continue;
+
+    strncpy(shared.names[gameCount], dirent.name, LIVESCAN_NAME_LEN - 1);
+    shared.names[gameCount][LIVESCAN_NAME_LEN - 1] = '\0';
+    strcpy(gamePaths[gameCount], path);
+    gameIDs[gameCount][0] = '\0';
+    gameCount++;
+  }
+  iomanX_dclose(dfd);
+}
+
 static void swapGames(unsigned int a, unsigned int b) {
   memcpy(line, shared.names[a], LIVESCAN_NAME_LEN);
   memcpy(shared.names[a], shared.names[b], LIVESCAN_NAME_LEN);
@@ -255,34 +309,199 @@ static void swapGames(unsigned int a, unsigned int b) {
   memcpy(gameIDs[b], line, GAME_ID_LEN);
 }
 
-static void appendStr(const char *str) { strcpy(&line[strlen(line)], str); }
+//
+// Games cache
+//
+// "key = value" lines: an optional "sort" line, then for each game its "game" (name) line,
+// "bsd"/"dvd"/"id" (PS2) or "psx" (PS1) lines and optional "played" and "fav" lines
 
-// Writes the list in the launcher's GAMES_CACHE_PATH format
-static int writeCache(void) {
-  int fd = iomanX_open(shared.cachePath, FIO_O_WRONLY | FIO_O_CREAT | FIO_O_TRUNC);
+// Reads the file at path into a new NUL-terminated buffer, freed with FreeSysMemory(), or returns NULL
+static char *readFile(const char *path) {
+  int fd = iomanX_open(path, FIO_O_RDONLY);
   if (fd < 0)
-    return fd;
+    return NULL;
 
-  int res = 0;
-  for (unsigned int i = 0; (i < gameCount) && !res; i++) {
-    // Each part is NUL-terminated within its array, so line can't overflow
-    line[0] = '\0';
-    appendStr("game = ");
-    appendStr(shared.names[i]);
-    appendStr("\nbsd = mmce\ndvd = ");
-    appendStr(gamePaths[i]);
-    appendStr("\n");
-    if (gameIDs[i][0]) {
-      appendStr("id = ");
-      appendStr(gameIDs[i]);
-      appendStr("\n");
+  char *data = NULL;
+  int size = iomanX_lseek(fd, 0, FIO_SEEK_END);
+  if ((size >= 0) && (size <= 128 * 1024) && (iomanX_lseek(fd, 0, FIO_SEEK_SET) == 0) && (data = AllocSysMemory(ALLOC_FIRST, size + 1, NULL))) {
+    if (iomanX_read(fd, data, size) == size)
+      data[size] = '\0';
+    else {
+      FreeSysMemory(data);
+      data = NULL;
     }
-    int len = strlen(line);
-    if (iomanX_write(fd, line, len) != len)
-      res = -5; // EIO
   }
   iomanX_close(fd);
-  return res;
+  return data;
+}
+
+static int isSpace(char c) { return (c == ' ') || (c == '\t') || (c == '\r'); }
+
+// Splits the next "key = value" line of the text at *pos in place. Returns 0 at the end of the text
+static int nextCacheLine(char **pos, char **key, char **value) {
+  while (**pos) {
+    char *start = *pos;
+    char *end = start;
+    while (*end && (*end != '\n'))
+      end++;
+    *pos = *end ? end + 1 : end;
+    *end = '\0';
+
+    char *eq = strchr(start, '=');
+    if (!eq)
+      continue;
+    char *k = eq;
+    while ((k > start) && isSpace(k[-1]))
+      k--;
+    *k = '\0';
+    char *v = eq + 1;
+    while (isSpace(*v))
+      v++;
+    for (char *e = v + strlen(v); (e > v) && isSpace(e[-1]); e--)
+      e[-1] = '\0';
+    while (isSpace(*start))
+      start++;
+    *key = start;
+    *value = v;
+    return 1;
+  }
+  return 0;
+}
+
+static unsigned int parseUInt(const char *s) {
+  unsigned int value = 0;
+  for (; isDigit(*s); s++)
+    value = value * 10 + (*s - '0');
+  return value;
+}
+
+static const char *cachePathKey(void) { return (shared.kind == LIVESCAN_KIND_PSX) ? "psx" : "dvd"; }
+
+static int isFavorite(unsigned int idx) { return (idx < LIVESCAN_MAX_GAMES) && (shared.fav[idx / 32] & (1u << (idx % 32))); }
+
+// Buffered cache writer, since every write to the memory card is slow
+static char outBuf[2048];
+static int outLen;
+static int outFd;
+static int outRes;
+
+static void outFlush(void) {
+  if (outLen && !outRes && (iomanX_write(outFd, outBuf, outLen) != outLen))
+    outRes = -5; // EIO
+  outLen = 0;
+}
+
+static void outLine(const char *key, const char *value) {
+  int len = strlen(key) + strlen(value) + 4;
+  if (len > (int)sizeof(outBuf))
+    return;
+  if (outLen + len > (int)sizeof(outBuf))
+    outFlush();
+  sprintf(&outBuf[outLen], "%s = %s\n", key, value);
+  outLen += len;
+}
+
+static int outOpen(void) {
+  outLen = 0;
+  outRes = 0;
+  outFd = iomanX_open(shared.cachePath, FIO_O_WRONLY | FIO_O_CREAT | FIO_O_TRUNC);
+  return outFd;
+}
+
+static int outClose(void) {
+  outFlush();
+  iomanX_close(outFd);
+  return outRes;
+}
+
+// Writes the list in the launcher's cache format, keeping the sort order of the previous cache and
+// the "played" counters and favorites of the games that are still there, which are also returned
+// in shared.played and shared.fav
+static int writeCache(void) {
+  char sort[8] = "name";
+  // Favorites toggled in the submenu and not saved yet replace the "fav" lines of the previous cache
+  unsigned int favInput[LIVESCAN_MAX_GAMES / 32];
+  int useFavInput = shared.favInput;
+  memcpy(favInput, shared.fav, sizeof(favInput));
+  memset(shared.played, 0, sizeof(shared.played));
+  memset(shared.fav, 0, sizeof(shared.fav));
+
+  char *old = readFile(shared.cachePath);
+  if (old) {
+    char *pos = old, *key, *value;
+    int current = -1; // Game of the lines being read, by index in the new list
+    int oldIdx = -1;  // Its index in the previous cache
+    while (nextCacheLine(&pos, &key, &value)) {
+      if (!strcmp(key, "sort")) {
+        strncpy(sort, value, sizeof(sort) - 1);
+        sort[sizeof(sort) - 1] = '\0';
+      } else if (!strcmp(key, "game")) {
+        current = -1;
+        oldIdx++;
+      } else if (!strcmp(key, cachePathKey())) {
+        for (unsigned int i = 0; i < gameCount; i++)
+          if (!strcmp(gamePaths[i], value))
+            current = i;
+        if ((current >= 0) && useFavInput && (oldIdx >= 0) && (oldIdx < LIVESCAN_MAX_GAMES) && (favInput[oldIdx / 32] & (1u << (oldIdx % 32))))
+          shared.fav[current / 32] |= 1u << (current % 32);
+      } else if ((current >= 0) && !strcmp(key, "played"))
+        shared.played[current] = parseUInt(value);
+      else if ((current >= 0) && !useFavInput && !strcmp(key, "fav") && parseUInt(value))
+        shared.fav[current / 32] |= 1u << (current % 32);
+    }
+    FreeSysMemory(old);
+  }
+
+  if (outOpen() < 0)
+    return outFd;
+  outLine("sort", sort);
+  char number[12];
+  for (unsigned int i = 0; i < gameCount; i++) {
+    outLine("game", shared.names[i]);
+    if (shared.kind == LIVESCAN_KIND_PSX)
+      outLine("psx", gamePaths[i]);
+    else {
+      outLine("bsd", "mmce");
+      outLine("dvd", gamePaths[i]);
+      if (gameIDs[i][0])
+        outLine("id", gameIDs[i]);
+    }
+    if (shared.played[i]) {
+      sprintf(number, "%u", shared.played[i]);
+      outLine("played", number);
+    }
+    if (isFavorite(i))
+      outLine("fav", "1");
+  }
+  return outClose();
+}
+
+// Rewrites the "fav" lines of the cache from shared.fav, by index of the games in the cache
+static int saveFavorites(void) {
+  char *cache = readFile(shared.cachePath);
+  if (!cache)
+    return -2; // ENOENT
+  if (outOpen() < 0) {
+    FreeSysMemory(cache);
+    return outFd;
+  }
+
+  char *pos = cache, *key, *value;
+  int current = -1;
+  while (nextCacheLine(&pos, &key, &value)) {
+    if (!strcmp(key, "fav"))
+      continue;
+    if (!strcmp(key, "game")) {
+      if ((current >= 0) && isFavorite(current))
+        outLine("fav", "1");
+      current++;
+    }
+    outLine(key, value);
+  }
+  if ((current >= 0) && isFavorite(current))
+    outLine("fav", "1");
+  FreeSysMemory(cache);
+  return outClose();
 }
 
 //
@@ -540,8 +759,12 @@ static void doScan(void) {
   if (shared.devices & LIVESCAN_DEV_MMCE) {
     for (int slot = 0; slot < 2; slot++) {
       sprintf(mountpoint, "mmce%d:", slot);
-      scanFolder(mountpoint, shared.cdFolder);
-      scanFolder(mountpoint, shared.dvdFolder);
+      if (shared.kind == LIVESCAN_KIND_PSX)
+        scanEmberFolder(mountpoint);
+      else {
+        scanFolder(mountpoint, shared.cdFolder);
+        scanFolder(mountpoint, shared.dvdFolder);
+      }
     }
   }
 
@@ -618,6 +841,8 @@ static void scanThread(void *arg) {
       shared.status = LIVESCAN_STATUS_BUSY;
       if (request == LIVESCAN_LIST)
         listThreads();
+      else if (request == LIVESCAN_SAVE_FAV)
+        shared.result = saveFavorites();
       else
         doScan();
       shared.status = LIVESCAN_STATUS_DONE;

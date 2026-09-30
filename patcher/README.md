@@ -133,14 +133,20 @@ On each enabled device, Ember must be installed as `EMBER/ember.elf` with its ga
 (one folder per game, with a `.cue` file inside), as described in Ember's documentation.
 When both submenus are enabled, the menu slots left after the regular entries are split evenly between them.
 
+The "Games >" and "PSX >" entries show the number of games in the list, like "Games (10) >".
+
 In both submenus:
-- Circle (Cross on Japanese consoles) or Triangle goes back to the main menu
-- Square switches between sorting by name and by most recently played, shown in the "< Back" label.
+- Circle (Cross on Japanese consoles) goes back to the main menu
+- Square switches between sorting by name and by most recently played.
   The order is saved in the cache the next time a game is launched or the list is refreshed
+- Triangle adds the game under the cursor to the favorites or removes it. Favorites are marked with `*` and listed
+  first in both sort orders. They're saved in the cache (`fav = 1`) right away when the live scan has loaded its module,
+  or else the next time a game is launched or the list is refreshed
 - Left/Right move the cursor a page (`OSDSYS_num_displayed_items`) up or down
 
-The button prompts at the bottom show "Back" instead of "Version" and the current sort order while a submenu is open.
-The Circle and Square icons are derived from the icons OSDSYS uses for Enter and Version; if they can't be derived,
+The button prompts at the bottom show "Back" instead of "Version", the current sort order (`A-Z` or `Recent`) and "Fav"
+while a submenu is open.
+The Circle and Square icons are derived from the icons OSDSYS uses for Enter and Version (Triangle); if they can't be derived,
 only the texts are shown. `games_button_debug = 1` shows the icon types in a line above the prompts: `e` (Enter),
 `v` (Version), `b` (Back), `s` (Sort) and `seen` (icons seen in other screens such as System Configuration, which shows
 Circle and Square).
@@ -156,7 +162,9 @@ These options are also read by the **launcher**:
 - `games_mmce_gameid` — if enabled (default), sends the game's title ID to MMCE devices before launching, so they switch to the game's own memory card (`mmce?:/MemoryCards/PS2/<ID>/<ID>-1.mcd`), like NHDDL does
 - `games_launcher` — `neutrino` (default) or `opl`. With `opl`, games are launched via `games_opl_path` when OPL can autolaunch them, falling back to Neutrino otherwise (see [launcher/README.md](../launcher/README.md#games-handler))
 - `games_opl_path` — path to OPL, e.g. [RiptOPL](https://github.com/NathanNeurotic/Open-PS2-Loader) (required for `games_launcher = opl`)
-- `games_live_scan` — **experimental**, MMCE only. If enabled, "Refresh list" scans without leaving OSDMenu.
+- `games_live_scan` — **experimental**, MMCE only (`games_device_mmce` for "Games >", `psx_device_mmce` for "PSX >").
+  If enabled, "Refresh list" scans without leaving OSDMenu. The sort order, "played" counters and favorites of the games
+  that are still there are kept.
   OSDSYS resets the IOP when it starts, so the patcher writes `iomanX`, `mmceman` and its own `gamescan.irx` to
   `mc?:/SYS-CONF/` (`LSIOMANX.IRX`, `LSMMCE.IRX`, `LSGSCAN.IRX`, only when they change) and, on the first "Refresh list",
   loads `iomanX` and `gamescan.irx` with OSDSYS's own `sceSifLoadModule()` ("Loading modules..."). It then controls
@@ -197,7 +205,7 @@ group_OSDSYS_ITEM_10 = Apps
 ```
 Each group is shown as a `<group> >` entry that opens a submenu with "< Back" and its entries in `OSDMENU.CNF` order.
 The groups are listed in alphabetical order after "Games >" and "PSX >", followed by the entries without a group.
-Circle/Triangle go back and Left/Right move a page, like in the games submenus. Up to 32 groups are supported.
+Circle/Triangle go back and Left/Right move a page. Up to 32 groups are supported.
 Group names can contain spaces, and are case-sensitive (`Apps` and `apps` are different groups).
 
 By default, OSDMenu uses custom menu coordinates to make the menu appear in the center of the screen.  

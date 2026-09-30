@@ -61,9 +61,14 @@ typedef struct {
   int count;                     // Number of names loaded
   int cacheLoaded;               // Whether the cache file was loaded (or the list was scanned live)
   int sortRecent;                // Sort by most recently played instead of by name (toggled with Square)
+  int favDirty;                  // Favorites were toggled and not saved to the cache yet
   uint32_t played[CUSTOM_ITEMS]; // "played" counter of each game in cache order, 0 if never played
+  uint8_t fav[CUSTOM_ITEMS];     // 1 for the favorite games in cache order (toggled with Triangle), shown first
   uint8_t order[CUSTOM_ITEMS];   // Cache index of the game shown at each position
 } GamesSubmenu;
+
+// Marks the favorite game names with FAVORITE_MARK and removes it from the others
+#define FAVORITE_MARK "* "
 
 // Menu groups (group_OSDSYS_ITEM_<idx>): each group is shown as a "<name> >" entry after "Games >"/"PSX >",
 // in alphabetical order, and opens a submenu with its items in CNF order
@@ -116,6 +121,7 @@ typedef struct {
   int liveScanBoot;        // writeLiveScanModules() result, or LIVESCAN_BOOT_NOT_LOADED (for diagnostics)
   uint32_t liveScanLoader; // OSDSYS's sceSifLoadModule(), 0 if not found
   int gamesUseMMCE;
+  int psxUseMMCE;
   char gamesCdFolder[32];
   char gamesDvdFolder[32];
 #endif
@@ -127,6 +133,10 @@ extern PatcherSettings settings;
 int loadConfig(void);
 void initConfig(void);
 #ifndef HOSD
+// Adds or removes FAVORITE_MARK from the names of the submenu games
+void markFavorites(GamesSubmenu *menu);
+// Shows the number of games in the submenu entry, like "Games (10) >"
+void setSubmenuEntryLabel(GamesSubmenu *menu);
 // Reserves the menuItemName regions of the games submenus and loads the names from their caches
 void loadGamesCache(void);
 #endif

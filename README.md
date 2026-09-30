@@ -295,8 +295,9 @@ Shutdown
 | Button | Action in a submenu |
 |---|---|
 | X | Launch the game or entry |
-| Circle / Triangle / "< Back" | Back to the main menu |
-| Square | Sort games by name `[A-Z]` or by recently played `[Recent]` (games submenus) |
+| Circle / "< Back" | Back to the main menu (Triangle too in menu groups) |
+| Square | Sort games by name `A-Z` or by recently played `Recent` (games submenus) |
+| Triangle | Add the game to the favorites (marked with `*` and listed first) or remove it (games submenus) |
 | Left / Right | Previous / next page |
 
 ### 5. Troubleshooting

@@ -24,7 +24,7 @@
 #define LIVESCAN_MAGIC0 0x4d44534f // "OSDM"
 #define LIVESCAN_MAGIC1 0x4556494c // "LIVE"
 #define LIVESCAN_MAGIC2 0x4e414353 // "SCAN"
-#define LIVESCAN_MAGIC3 0x35303030 // "0005"
+#define LIVESCAN_MAGIC3 0x36303030 // "0006"
 
 #define LIVESCAN_IOP_RAM 0xbc000000 // IOP RAM as seen from the EE (uncached)
 #define LIVESCAN_IOP_RAM_SIZE 0x200000
@@ -42,9 +42,14 @@
 // devices
 #define LIVESCAN_DEV_MMCE (1 << 0)
 
+// kind: what to scan
+#define LIVESCAN_KIND_PS2 0 // PS2 ISOs in cdFolder and dvdFolder (GAMES_CACHE_PATH)
+#define LIVESCAN_KIND_PSX 1 // PS1 games for Ember in EMBER/games/<game>/ with a .cue file (PSX_CACHE_PATH)
+
 // request
-#define LIVESCAN_SCAN 1      // Scan and write the cache
-#define LIVESCAN_LIST 2      // Only list the threads (threads, threadCount), for the diagnostics log
+#define LIVESCAN_SCAN 1     // Scan and write the cache, keeping the sort order, "played" counters and favorites of the games still found
+#define LIVESCAN_LIST 2     // Only list the threads (threads, threadCount), for the diagnostics log
+#define LIVESCAN_SAVE_FAV 3 // Rewrite the favorites of the cache at cachePath from fav (by cache index)
 
 // stage: what gamescan.irx is doing, shown while scanning
 #define LIVESCAN_STAGE_IDLE 0
@@ -89,10 +94,11 @@ typedef struct {
   volatile unsigned int status;    // LIVESCAN_STATUS_*
   volatile int result;             // Cache write result: 0 on success, < 0 on error
   unsigned int devices;            // LIVESCAN_DEV_* to scan, set by the EE
+  unsigned int kind;               // LIVESCAN_KIND_*, set by the EE
   unsigned int count;              // Number of games in names
   char cdFolder[LIVESCAN_FOLDER_LEN];
   char dvdFolder[LIVESCAN_FOLDER_LEN];
-  char cachePath[LIVESCAN_PATH_LEN]; // GAMES_CACHE_PATH on the right memory card, set by the EE
+  char cachePath[LIVESCAN_PATH_LEN]; // GAMES_CACHE_PATH or PSX_CACHE_PATH on the right memory card, set by the EE
   char mmcePath[LIVESCAN_PATH_LEN];  // LIVESCAN_IRX_MMCEMAN on the right memory card, set by the EE
   volatile unsigned int stage;       // LIVESCAN_STAGE_*
   int mmceLoaded;                    // StartModule() result once mmceman is loaded, 0 before
@@ -109,6 +115,9 @@ typedef struct {
   unsigned int logLength;            // Bytes in logBuffer
   char logName[LIVESCAN_LOG_NAME_LEN]; // Directory (up to 20 characters) set by the EE, full path set by the IOP
   char logBuffer[LIVESCAN_LOG_CHUNK];
+  unsigned int favInput; // Set by the EE with LIVESCAN_SCAN when fav holds favorites not saved yet, by index in the previous cache
+  unsigned int played[LIVESCAN_MAX_GAMES];  // "played" counter of each game in names, 0 if never played
+  unsigned int fav[LIVESCAN_MAX_GAMES / 32]; // Favorites bitmask by index in names, also the input of LIVESCAN_SAVE_FAV
   char names[LIVESCAN_MAX_GAMES][LIVESCAN_NAME_LEN];
 } LiveScanShared;
 
