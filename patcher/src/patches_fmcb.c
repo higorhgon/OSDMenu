@@ -384,6 +384,97 @@ static void waitForLiveScanModule(GamesSubmenu *menu) {
   liveScanFrames = 0;
 }
 
+// IOP libraries whose exports are named in the sio2man diagnostics
+static const char *iopDiagLibNames[] = {"thsemap", "thevent", "thbase", "intrman", "sysmem", "loadcore", "dmacman", "sysclib"};
+#define IOP_DIAG_LIBS (sizeof(iopDiagLibNames) / sizeof(iopDiagLibNames[0]))
+static uint32_t iopDiagLibTables[IOP_DIAG_LIBS];
+
+// Reads a word of IOP code at the IOP address addr
+static uint32_t iopReadCode(uint32_t addr) { return iopRead(LIVESCAN_IOP_RAM + (addr & 0x1ffffc)); }
+
+// Names the IOP function at addr as "<library>:<export index>", returns 0 if it isn't an export of iopDiagLibNames
+static int nameIopFunction(uint32_t addr, char *out, int size) {
+  for (unsigned int lib = 0; lib < IOP_DIAG_LIBS; lib++) {
+    if (!iopDiagLibTables[lib])
+      continue;
+    for (int e = 0; e < 64; e++) {
+      uint32_t func = iopRead(iopDiagLibTables[lib] + 20 + e * 4);
+      if (!func)
+        break;
+      if ((func & 0x1fffff) == (addr & 0x1fffff)) {
+        snprintf(out, size, "%s:%d", iopDiagLibNames[lib], e);
+        return 1;
+      }
+    }
+  }
+  return 0;
+}
+
+// Appends the calls made by the IOP function at addr to line: library exports by name (through their
+// linked import stubs, "j <function>"), and the calls of local functions one level deep in brackets
+static void describeIopCalls(uint32_t addr, char *line, int size, int depth) {
+  for (int i = 0; i < 48; i++) {
+    uint32_t insn = iopReadCode(addr + i * 4);
+    int len = strlen(line);
+    if (len >= size - 12)
+      return;
+    if ((insn >> 26) == 0x03) { // jal
+      uint32_t target = (insn & 0x03ffffff) << 2;
+      uint32_t stub = iopReadCode(target);
+      char name[24];
+      if (((stub >> 26) == 0x02) && nameIopFunction((stub & 0x03ffffff) << 2, name, sizeof(name)))
+        snprintf(&line[len], size - len, " %s", name);
+      else if (!depth) {
+        snprintf(&line[len], size - len, " [%lx", target);
+        describeIopCalls(target, line, size, 1);
+        len = strlen(line);
+        snprintf(&line[len], size - len, "]");
+      } else
+        snprintf(&line[len], size - len, " %lx", target);
+    }
+    if (insn == 0x03e00008) // jr ra
+      return;
+  }
+}
+
+// games_live_scan = 2, first step: lists what OSDSYS's rom0:SIO2MAN does in the lock (export 23 and 24),
+// transfer (25) and unlock (26) functions, as the Games submenu entries
+static int showSio2Diagnostics(GamesSubmenu *menu) {
+  for (unsigned int lib = 0; lib < IOP_DIAG_LIBS; lib++)
+    iopDiagLibTables[lib] = iopFindExportTable(iopDiagLibNames[lib]);
+
+  int lines = 0;
+#define DIAG_LINE (settings.menuItemName[menu->base + lines])
+  uint32_t sio2 = iopFindExportTable("sio2man");
+  snprintf(DIAG_LINE, NAME_LEN, "sio2man %x @%lx pad %x mc %x iox %x ld %lx", sio2 ? (int)(iopRead(sio2 + 8) & 0xffff) : -1,
+           sio2 ? (sio2 - LIVESCAN_IOP_RAM) : 0, iopLibraryVersion("padman"), iopLibraryVersion("mcman"), iopLibraryVersion("iomanx"),
+           settings.liveScanLoader);
+  lines++;
+  if (sio2) {
+    for (int e = 23; (e <= 26) && (lines < menu->max - 2); e++) {
+      uint32_t func = iopRead(sio2 + 20 + e * 4);
+      snprintf(DIAG_LINE, NAME_LEN, "e%d %lx:", e, func);
+      describeIopCalls(func, DIAG_LINE, NAME_LEN, 0);
+      lines++;
+    }
+    // Raw code of the lock (23) and unlock (26) functions
+    for (int e = 23; e <= 26; e += 3) {
+      uint32_t func = iopRead(sio2 + 20 + e * 4);
+      for (int part = 0; (part < 2) && (lines < menu->max); part++) {
+        int len = snprintf(DIAG_LINE, NAME_LEN, "%d+%d", e, part * 6);
+        for (int w = 0; w < 6; w++)
+          len += snprintf(&DIAG_LINE[len], NAME_LEN - len, " %08lx", iopReadCode(func + (part * 6 + w) * 4));
+        lines++;
+      }
+    }
+  }
+#undef DIAG_LINE
+  for (int i = 0; i < lines; i++)
+    menu->played[i] = 0;
+  menu->count = lines;
+  return lines;
+}
+
 // games_live_scan = 2: every "Refresh list" runs one step and shows its result, so the step
 // that fails or hangs can be told from the last label on screen. Runs from the X button handler
 static int liveScanDiagStep = 0;
@@ -392,8 +483,8 @@ static void runLiveScanDiagStep(GamesSubmenu *menu) {
   int ret;
   switch (liveScanDiagStep) {
   case 0:
-    snprintf(label, sizeof(label), "Refresh [sio2 %x iox %x ld %lx]", iopLibraryVersion("sio2man"), iopLibraryVersion("iomanx"),
-             settings.liveScanLoader);
+    showSio2Diagnostics(menu);
+    snprintf(label, sizeof(label), "Refresh [diag, next: iomanX]");
     break;
   case 1:
   case 2:
