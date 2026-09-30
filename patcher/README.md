@@ -163,17 +163,18 @@ These options are also read by the **launcher**:
   `gamescan.irx` through shared IOP memory, showing what it's doing until the list is ready.
   OSDSYS's `rom0:SIO2MAN` (ROM 2.30) is the older `sio2man` 1.2, where every SIO2 transfer goes through `sio2man`'s
   thread, so `mmceman` can't share the SIO2 with the controller and memory card drivers. Instead, for every scan,
-  `gamescan.irx` suspends the threads of the modules that use the SIO2 (controller, memory card, multitap and remote),
-  loads `mmceman` the first time (read into IOP RAM before, since the memory card can't be read with its threads
-  suspended), scans, resumes the threads and then writes the list. **The controller doesn't respond while scanning.**
-  If the scan takes more than 20 seconds, the threads are resumed anyway.
+  `gamescan.irx` takes `sio2man`'s memory card transfer lock, which makes the controller, memory card, multitap and
+  remote drivers wait for their turn, loads `mmceman` the first time (read into IOP RAM before, since the memory card
+  can't be read while the lock is held), scans, hands the SIO2 back and then writes the list.
+  The IOP kernel doesn't implement `SuspendThread()`, so the drivers' threads can't be paused instead.
+  **The controller doesn't respond while scanning.** If the scan takes more than 20 seconds, the lock is released anyway.
   Errors are shown in the "Refresh list" label, and the next "Refresh list" falls back to the launcher.
-  With `games_live_scan = 2`, the first "Refresh list" writes a diagnostics log instead of scanning, without suspending
-  anything: `gamescan.irx` writes `mc?:/SYS-CONF/OSDMLIVE-<YYMMDD>-<HHMMSS>.LOG` (console clock) with the IOP threads
-  (entry point, module, status and priority) and every thread tag found in IOP RAM with the thread ID made from it.
+  With `games_live_scan = 2`, the first "Refresh list" writes a diagnostics log instead of scanning, without taking the
+  lock: `gamescan.irx` writes `mc?:/SYS-CONF/OSDMLIVE-<YYMMDD>-<HHMMSS>.LOG` (console clock) with the `sio2man` lock
+  functions, the SIO2 interrupt handler and the IOP threads (entry point, module, status and priority).
   The log name is shown in the "Refresh list" label, and the IOP state (library versions and every IOP module OSDSYS
-  loaded) in the Games submenu. The next "Refresh list" scans and writes another
-  log with the scan result and the threads it suspended. `mc?:/SYS-CONF/OSDMLIVE.LOG` is also written on boot.
+  loaded) in the Games submenu. The next "Refresh list" scans and writes another log with the scan result and the
+  threads after it. `mc?:/SYS-CONF/OSDMLIVE.LOG` is also written on boot.
   May break OSDSYS memory card or controller access
 - `games_return_path` — ELF to run after "Refresh list" or a failed game launch (e.g. `mc?:/BOOT/BOOT.ELF`). When not set, the launcher reopens OSDMenu (with the games submenu open) from the path it was started from, then tries `mc?:/BOOT/osdmenu.elf`, and only falls back to the original OSDSYS if both fail
 - `psx_device_usb`, `psx_device_mx4sio`, `psx_device_mmce` — enable scanning each device type for PS1 games (default: all disabled)

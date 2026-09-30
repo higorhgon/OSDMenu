@@ -12,10 +12,9 @@
 // LIVESCAN_IOP_RAM (uncached). The structure is located by its magic words,
 // which gamescan.irx only writes at runtime so the module image never contains them.
 
-// gamescan.irx loads mmceman itself (see LIVESCAN_SCAN_LOAD_MMCE), since OSDSYS's rom0:SIO2MAN
-// is the older thread-based sio2man 1.2, which mmceman can't share the SIO2 with. While mmceman
-// runs, gamescan.irx suspends the threads of the modules that use the SIO2 (controller, memory
-// card, multitap and remote), which stops the controller for the duration of the scan.
+// gamescan.irx loads mmceman itself, since OSDSYS's rom0:SIO2MAN is the older thread-based
+// sio2man 1.2, which mmceman can't share the SIO2 with. While mmceman runs, gamescan.irx holds
+// sio2man's transfer lock, which stops the controller and memory card drivers for the duration of the scan.
 //
 // Module files on the memory card OSDMENU.CNF was loaded from ('?' is replaced with the slot)
 #define LIVESCAN_IRX_IOMANX "mc?:/SYS-CONF/LSIOMANX.IRX"
@@ -25,7 +24,7 @@
 #define LIVESCAN_MAGIC0 0x4d44534f // "OSDM"
 #define LIVESCAN_MAGIC1 0x4556494c // "LIVE"
 #define LIVESCAN_MAGIC2 0x4e414353 // "SCAN"
-#define LIVESCAN_MAGIC3 0x34303030 // "0004"
+#define LIVESCAN_MAGIC3 0x35303030 // "0005"
 
 #define LIVESCAN_IOP_RAM 0xbc000000 // IOP RAM as seen from the EE (uncached)
 #define LIVESCAN_IOP_RAM_SIZE 0x200000
@@ -50,32 +49,19 @@
 // stage: what gamescan.irx is doing, shown while scanning
 #define LIVESCAN_STAGE_IDLE 0
 #define LIVESCAN_STAGE_READ_MMCE 1 // Reading mmceman from the memory card
-#define LIVESCAN_STAGE_PAUSE 2     // Suspending the SIO2 threads
+#define LIVESCAN_STAGE_PAUSE 2     // Waiting for sio2man's transfer lock
 #define LIVESCAN_STAGE_LOAD_MMCE 3 // Loading mmceman from IOP RAM
 #define LIVESCAN_STAGE_SCAN 4      // Scanning the MMCE
-#define LIVESCAN_STAGE_RESUME 5    // Resuming the SIO2 threads
+#define LIVESCAN_STAGE_RESUME 5    // Handing the SIO2 back
 #define LIVESCAN_STAGE_WRITE 6     // Writing the cache
 
 // result errors other than iomanX's
 #define LIVESCAN_ERR_MMCE_READ -1000  // - errno: mmceman couldn't be read
 #define LIVESCAN_ERR_MMCE_LOAD -2000  // - error: LoadModuleBuffer() failed
 #define LIVESCAN_ERR_MMCE_START -3000 // StartModule() failed or mmceman didn't stay resident
-#define LIVESCAN_ERR_NO_THREADS -4000 // No SIO2 thread found to suspend
+#define LIVESCAN_ERR_NO_LOCK -4000    // sio2man's transfer lock not found
 
 #define LIVESCAN_MAX_THREADS 48
-
-#define LIVESCAN_MAX_TAGS 64
-
-// Word with the thread tag found in IOP RAM, for the diagnostics log
-typedef struct {
-  unsigned int addr;
-  unsigned int word;
-  int handle;       // Thread ID made from addr and the ID in word
-  int result;       // ReferThreadStatus() result
-  unsigned int status;
-  unsigned int initPriority;
-  unsigned int entry;
-} LiveScanTag;
 
 // Thread found in IOP RAM (all words, so the EE can read them one at a time)
 typedef struct {
@@ -83,8 +69,8 @@ typedef struct {
   unsigned int entry;
   unsigned int status;   // THS_* when listed
   unsigned int priority; // Current priority
+  unsigned int waitType; // TSW_* when waiting
   int sio2;              // 1 if the thread belongs to a module that uses the SIO2
-  int suspended;         // SuspendThread() result, or 1 if the thread was left running
 } LiveScanThread;
 
 // logRequest: the EE sends a log in chunks of up to LIVESCAN_LOG_CHUNK bytes, which gamescan.irx
@@ -110,14 +96,14 @@ typedef struct {
   char mmcePath[LIVESCAN_PATH_LEN];  // LIVESCAN_IRX_MMCEMAN on the right memory card, set by the EE
   volatile unsigned int stage;       // LIVESCAN_STAGE_*
   int mmceLoaded;                    // StartModule() result once mmceman is loaded, 0 before
-  int suspendedCount;                // Threads suspended by the last scan
-  int watchdogResumed;               // Set if the threads were resumed by the watchdog (scan stuck for 20 seconds)
-  unsigned int tagCount;             // Words with the thread tag found in IOP RAM
+  int watchdogResumed;               // Set if the watchdog handed the SIO2 back (scan stuck for 20 seconds)
+  unsigned int sio2Version;          // sio2man version the lock functions were taken from
+  unsigned int sio2Lock;             // sio2man's memory card transfer init (export 24) and transfer reset (26)
+  unsigned int sio2Unlock;
+  unsigned int sio2Intr;             // SIO2 interrupt handler and argument, from intrman
+  unsigned int sio2IntrArg;
   unsigned int threadCount;          // Threads in threads
   LiveScanThread threads[LIVESCAN_MAX_THREADS];
-  int ownThreads[2];                 // gamescan.irx's own thread IDs (scan, watchdog), to compare with the tags
-  unsigned int ownTcb[16];           // Words around the address the scan thread ID points to, from 8 bytes before
-  LiveScanTag tags[LIVESCAN_MAX_TAGS];
   volatile unsigned int logRequest;  // LIVESCAN_LOG_*
   volatile int logResult;            // Bytes written, or < 0 on error
   unsigned int logLength;            // Bytes in logBuffer

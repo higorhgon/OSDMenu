@@ -8,8 +8,8 @@
 //
 // OSDSYS's rom0:SIO2MAN is the older sio2man 1.2, where every SIO2 transfer goes through
 // sio2man's thread, while mmceman drives the SIO2 directly (swapping sio2man's interrupt handler).
-// So while mmceman runs, the threads of the modules that use the SIO2 are suspended,
-// and mmceman is read into IOP RAM before, since the memory card can't be read without them.
+// So while mmceman runs, gamescan.irx holds sio2man's transfer lock, and mmceman is read into
+// IOP RAM before, since the memory card can't be read while the lock is held.
 #include "irx_imports.h"
 #include "livescan.h"
 #include <iox_stat.h>
@@ -286,12 +286,85 @@ static int writeCache(void) {
 }
 
 //
-// SIO2 threads
+// SIO2 lock
+//
+// OSDSYS's sio2man 1.2 runs every transfer from its own thread: a driver asks for the SIO2 by setting
+// its "transfer init" event flag bit (export 23 for the controller, 24 for the memory card),
+// waits until sio2man's thread grants it, sends its transfers (export 25) and hands the SIO2 back with
+// "transfer reset" (export 26). While gamescan.irx holds it, padman, mcserv, multitap_manager and rmman2
+// wait for their turn in sio2man, so mmceman can drive the SIO2 alone.
+// The IOP threadman doesn't implement SuspendThread() (it returns KE_ERROR), so the threads can't be paused.
+// The memory card lock is used, since padman asks for the controller one every frame and two threads
+// waiting for the same grant would both get it.
+static void (*sio2Lock)(void) = NULL;
+static void (*sio2Unlock)(void) = NULL;
+static volatile int sio2Locked = 0;
+static volatile unsigned int lockedTicks = 0;
+
+// Finds sio2man's memory card transfer init (24) and transfer reset (26) in loadcore's library list
+static int findSIO2Lock(void) {
+  if (sio2Lock)
+    return 0;
+  lc_internals_t *lc = GetLoadcoreInternalData();
+  iop_library_t *lib = lc ? lc->let_next : NULL;
+  for (int n = 0; lib && (n < 128); n++, lib = lib->prev) {
+    int match = 1;
+    for (int i = 0; i < 8; i++)
+      if (lib->name[i] != "sio2man"[i])
+        match = 0;
+    if (!match)
+      continue;
+    // Both interfaces have the lock functions at 24 and 26, but only 1.2 is expected under OSDSYS
+    int count = 0;
+    while ((count < 32) && lib->exports[count])
+      count++;
+    if (count <= 26)
+      continue;
+    shared.sio2Version = lib->version;
+    sio2Lock = lib->exports[24];
+    sio2Unlock = lib->exports[26];
+    shared.sio2Lock = (unsigned int)sio2Lock;
+    shared.sio2Unlock = (unsigned int)sio2Unlock;
+    return 0;
+  }
+  return LIVESCAN_ERR_NO_LOCK;
+}
+
+static void lockSIO2(void) {
+  sio2Lock();
+  lockedTicks = 0;
+  sio2Locked = 1;
+}
+
+// Hands the SIO2 back once: a second transfer reset would end the next driver's turn
+static void unlockSIO2(void) {
+  int state;
+  CpuSuspendIntr(&state);
+  int locked = sio2Locked;
+  sio2Locked = 0;
+  CpuResumeIntr(state);
+  if (locked)
+    sio2Unlock();
+}
+
+// Hands the SIO2 back if the scan holds it for more than 20 seconds, so a stuck scan doesn't leave
+// the controller and the memory cards stopped
+static void watchdogThread(void *arg) {
+  while (1) {
+    DelayThread(500 * 1000);
+    if (sio2Locked && (++lockedTicks >= 40)) {
+      shared.watchdogResumed = 1;
+      unlockSIO2();
+    }
+  }
+}
+
+//
+// Threads, for the diagnostics log
 //
 // Threads are found by scanning IOP RAM for the thread control block tag (0x7f01 in the first halfword,
 // the ID in the second), turning each address into a thread ID the same way threadman does
-// and checking it with ReferThreadStatus(). Only threads whose entry point is in the code of a module
-// that uses the SIO2 are suspended, so a false match can't be suspended.
+// and checking it with ReferThreadStatus().
 // In the ROM threadman (checked on ROM 2.30), the tag is 8 bytes into the control block, after the
 // queue links, and thread IDs point to the start of the block. PS2SDK's threadman puts the tag first,
 // so that's tried when the ROM layout doesn't match.
@@ -305,10 +378,6 @@ static const char *sio2Modules[] = {"pad", "xpad", "mc", "xmc", "multitap", "mta
 #define MAX_SIO2_RANGES 16
 static unsigned int sio2Start[MAX_SIO2_RANGES], sio2End[MAX_SIO2_RANGES];
 static int sio2Ranges;
-
-static int pausedHandles[LIVESCAN_MAX_THREADS];
-static volatile int pausedCount = 0;
-static volatile unsigned int pausedTicks = 0;
 
 // Finds the code of the loaded modules that use the SIO2
 static void findSIO2Modules(void) {
@@ -337,27 +406,25 @@ static int isSIO2Code(unsigned int addr) {
   return 0;
 }
 
-// Lists the threads in shared.threads, suspending the SIO2 ones if suspend is set
-static void listThreads(int suspend) {
+// Lists the threads in shared.threads, along with the SIO2 lock functions and interrupt handler
+static void listThreads(void) {
   iop_thread_info_t info;
   findSIO2Modules();
+  findSIO2Lock();
+  intrman_internals_t *intr = GetIntrmanInternalData();
+  if (intr && intr->interrupt_handler_table) {
+    shared.sio2Intr = (unsigned int)intr->interrupt_handler_table[IOP_IRQ_SIO2].handler;
+    shared.sio2IntrArg = (unsigned int)intr->interrupt_handler_table[IOP_IRQ_SIO2].userdata;
+  }
   shared.threadCount = 0;
-  shared.tagCount = 0;
 
-  // Words around the address gamescan.irx's own thread ID points to, if it's made like THREAD_HANDLE()
-  unsigned int own = (((unsigned int)shared.ownThreads[0] >> 7) << 2) & 0x1ffffc;
-  for (int i = 0; i < 16; i++)
-    shared.ownTcb[i] = ((own >= 8) && (own + 56 < LIVESCAN_IOP_RAM_SIZE)) ? *(volatile unsigned int *)(own - 8 + i * 4) : 0;
-
-  for (unsigned int addr = 0x800; addr < LIVESCAN_IOP_RAM_SIZE; addr += 4) {
+  for (unsigned int addr = 0x808; addr < LIVESCAN_IOP_RAM_SIZE; addr += 4) {
     // Thread IDs stored here could look like a tag
-    if (((addr >= (unsigned int)&shared) && (addr < (unsigned int)&shared + sizeof(shared))) ||
-        ((addr >= (unsigned int)pausedHandles) && (addr < (unsigned int)pausedHandles + sizeof(pausedHandles))))
+    if ((addr >= (unsigned int)&shared) && (addr < (unsigned int)&shared + sizeof(shared)))
       continue;
     unsigned int word = *(volatile unsigned int *)addr;
     if ((word & 0xffff) != TAG_THREAD)
       continue;
-    shared.tagCount++;
 
     int handle = THREAD_HANDLE(addr - 8, word >> 16);
     memset(&info, 0, sizeof(info));
@@ -367,21 +434,10 @@ static void listThreads(int suspend) {
       memset(&info, 0, sizeof(info));
       result = ReferThreadStatus(handle, &info);
     }
-    unsigned int status = info.status;
-    if (shared.tagCount <= LIVESCAN_MAX_TAGS) {
-      LiveScanTag *tag = &shared.tags[shared.tagCount - 1];
-      tag->addr = addr;
-      tag->word = word;
-      tag->handle = handle;
-      tag->result = result;
-      tag->status = status;
-      tag->initPriority = info.initPriority;
-      tag->entry = (unsigned int)info.entry;
-    }
-    if (result != 0)
-      continue;
     // Skip anything that doesn't look like a thread
-    if (((status != THS_RUN) && (status != THS_READY) && (status != THS_WAIT) && (status != THS_SUSPEND) && (status != THS_WAITSUSPEND) &&
+    unsigned int status = info.status;
+    if ((result != 0) ||
+        ((status != THS_RUN) && (status != THS_READY) && (status != THS_WAIT) && (status != THS_SUSPEND) && (status != THS_WAITSUSPEND) &&
          (status != THS_DORMANT)) ||
         (info.initPriority < 1) || (info.initPriority > 127) || (((unsigned int)info.entry & 0x1fffff) < 0x800))
       continue;
@@ -398,38 +454,8 @@ static void listThreads(int suspend) {
     thread->entry = (unsigned int)info.entry;
     thread->status = status;
     thread->priority = info.currentPriority;
+    thread->waitType = info.waitType;
     thread->sio2 = isSIO2Code(thread->entry);
-    thread->suspended = 1;
-
-    // Running, ready or waiting threads are suspended. The current thread is never in a SIO2 module
-    if (suspend && thread->sio2 && ((status == THS_READY) || (status == THS_WAIT) || (status == THS_RUN))) {
-      thread->suspended = SuspendThread(handle);
-      if (!thread->suspended)
-        pausedHandles[pausedCount++] = handle;
-    }
-  }
-}
-
-static void resumeThreads(void) {
-  int count = pausedCount;
-  pausedCount = 0;
-  for (int i = 0; i < count; i++)
-    ResumeThread(pausedHandles[i]);
-}
-
-// Resumes the SIO2 threads if the scan takes more than 20 seconds, so a stuck scan doesn't leave
-// the controller and the memory cards stopped
-static void watchdogThread(void *arg) {
-  while (1) {
-    DelayThread(500 * 1000);
-    if (!pausedCount) {
-      pausedTicks = 0;
-      continue;
-    }
-    if (++pausedTicks >= 40) {
-      shared.watchdogResumed = 1;
-      resumeThreads();
-    }
   }
 }
 
@@ -469,7 +495,7 @@ out:
   return res;
 }
 
-// Loads and starts mmceman from IOP RAM. Must be called with the SIO2 threads suspended,
+// Loads and starts mmceman from IOP RAM. Must be called with the SIO2 locked,
 // since mmceman looks for the MMCE devices when it starts
 static int startMMCE(void) {
   int id = LoadModuleBuffer(mmceBuffer);
@@ -491,7 +517,9 @@ static void doScan(void) {
   int res = 0;
   gameCount = 0;
   shared.watchdogResumed = 0;
-  shared.suspendedCount = 0;
+
+  if ((res = findSIO2Lock()))
+    goto out;
 
   if (!shared.mmceLoaded) {
     shared.stage = LIVESCAN_STAGE_READ_MMCE;
@@ -500,13 +528,7 @@ static void doScan(void) {
   }
 
   shared.stage = LIVESCAN_STAGE_PAUSE;
-  listThreads(1);
-  shared.suspendedCount = pausedCount;
-  if (!pausedCount) {
-    res = LIVESCAN_ERR_NO_THREADS;
-    goto out;
-  }
-  DelayThread(20 * 1000); // Lets a transfer that was running finish
+  lockSIO2();
 
   if (!shared.mmceLoaded) {
     shared.stage = LIVESCAN_STAGE_LOAD_MMCE;
@@ -523,9 +545,9 @@ static void doScan(void) {
     }
   }
 
-  // The cache is on the memory card, so it's written after resuming the threads
+  // The cache is on the memory card, so it's written after handing the SIO2 back
   shared.stage = LIVESCAN_STAGE_RESUME;
-  resumeThreads();
+  unlockSIO2();
 
   // Insertion sort by name
   for (unsigned int i = 1; i < gameCount; i++)
@@ -536,7 +558,8 @@ static void doScan(void) {
   res = writeCache();
 
 out:
-  resumeThreads();
+  unlockSIO2();
+  listThreads(); // For the log: the thread states and the SIO2 interrupt handler after the scan
   shared.count = gameCount;
   shared.result = res;
   shared.stage = LIVESCAN_STAGE_IDLE;
@@ -594,7 +617,7 @@ static void scanThread(void *arg) {
       shared.request = 0;
       shared.status = LIVESCAN_STATUS_BUSY;
       if (request == LIVESCAN_LIST)
-        listThreads(0);
+        listThreads();
       else
         doScan();
       shared.status = LIVESCAN_STATUS_DONE;
@@ -625,8 +648,6 @@ int _start(int argc, char *argv[]) {
   if (watchdog < 0)
     return MODULE_NO_RESIDENT_END;
 
-  shared.ownThreads[0] = tid;
-  shared.ownThreads[1] = watchdog;
   StartThread(watchdog, NULL);
   StartThread(tid, NULL);
 

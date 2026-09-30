@@ -4,6 +4,7 @@
 #include "irx.h"
 
 #include "cdvdman.h"
+#include "intrman.h"
 #include "iomanX.h"
 #include "loadcore.h"
 #include "modload.h"

@@ -125,10 +125,10 @@ static void sortGames(GamesSubmenu *menu) {
 
 // Shows "< Back", the games and "Refresh list" of the submenu as the custom entries.
 // OSDSYS reads the entry table and cursor from menuInfo every frame, so this takes
-// effect immediately without leaving the OSD. The "< Back" label shows the sort order
+// effect immediately without leaving the OSD. The sort order is shown in the "Sort" button prompt
 static void showGamesEntries(GamesSubmenu *menu) {
   int pos = 0;
-  strcpy(settings.menuItemName[menu->base + menu->count], menu->sortRecent ? "< Back  [Recent]" : "< Back  [A-Z]");
+  strcpy(settings.menuItemName[menu->base + menu->count], "< Back");
   setMenuEntry(pos++, menu->base + menu->count); // "< Back"
   for (int i = 0; i < menu->count; i++)
     setMenuEntry(pos++, menu->base + menu->order[i]);
@@ -546,46 +546,27 @@ static void iopModuleName(uint32_t internals, uint32_t addr, char *name) {
   }
 }
 
-// Logs the threads gamescan.irx found: suspended is the SuspendThread() result, or 1 when left running
+// Logs the threads gamescan.irx found, the sio2man lock functions and the SIO2 interrupt handler
 static void logLiveScanThreads(void) {
   uint32_t internals = iopLoadcoreInternals();
+  char name[17];
+  uint32_t intr = iopRead(LIVESCAN_FIELD(sio2Intr));
+  iopModuleName(internals, intr, name);
+  logPrintf("\nsio2man %lx lock %05lx unlock %05lx, SIO2 interrupt handler %05lx (%s) arg %05lx\n", iopRead(LIVESCAN_FIELD(sio2Version)),
+            iopRead(LIVESCAN_FIELD(sio2Lock)) & 0x1fffff, iopRead(LIVESCAN_FIELD(sio2Unlock)) & 0x1fffff, intr & 0x1fffff, name,
+            iopRead(LIVESCAN_FIELD(sio2IntrArg)) & 0x1fffff);
+
   uint32_t count = iopRead(LIVESCAN_FIELD(threadCount));
   if (count > LIVESCAN_MAX_THREADS)
     count = LIVESCAN_MAX_THREADS;
-  logPrintf("\nThreads (thread tags found %lu, threads %lu):\n  handle   entry  status prio sio2 suspended module\n",
-            iopRead(LIVESCAN_FIELD(tagCount)), count);
+  logPrintf("\nThreads (%lu):\n  handle   entry  status wait prio sio2 module\n", count);
   for (uint32_t i = 0; i < count; i++) {
     uint32_t thread = LIVESCAN_FIELD(threads) + i * sizeof(LiveScanThread);
     uint32_t entry = iopRead(thread + offsetof(LiveScanThread, entry));
-    char name[17];
     iopModuleName(internals, entry, name);
-    logPrintf("  %08lx %05lx %6lx %4ld %4ld %9ld %s\n", iopRead(thread + offsetof(LiveScanThread, handle)), entry & 0x1fffff,
-              iopRead(thread + offsetof(LiveScanThread, status)), iopRead(thread + offsetof(LiveScanThread, priority)),
-              iopRead(thread + offsetof(LiveScanThread, sio2)), (int32_t)iopRead(thread + offsetof(LiveScanThread, suspended)), name);
-  }
-
-  // Raw data, to check how the thread IDs are made
-  uint32_t own = iopRead(LIVESCAN_FIELD(ownThreads));
-  logPrintf("\ngamescan threads %08lx %08lx, words from 8 bytes before %05lx:", own, iopRead(LIVESCAN_FIELD(ownThreads) + 4),
-            ((own >> 7) << 2) & 0x1ffffc);
-  for (int i = 0; i < 16; i++)
-    logPrintf("%s%08lx", (i % 8) ? " " : "\n  ", iopRead(LIVESCAN_FIELD(ownTcb) + i * 4));
-  uint32_t tags = iopRead(LIVESCAN_FIELD(tagCount));
-  if (tags > LIVESCAN_MAX_TAGS)
-    tags = LIVESCAN_MAX_TAGS;
-  logPrintf("\n\nThread tags:\n  addr  word     handle   result status prio entry  module, words from 8 bytes before\n");
-  for (uint32_t i = 0; i < tags; i++) {
-    uint32_t tag = LIVESCAN_FIELD(tags) + i * sizeof(LiveScanTag);
-    uint32_t addr = iopRead(tag + offsetof(LiveScanTag, addr));
-    uint32_t entry = iopRead(tag + offsetof(LiveScanTag, entry));
-    char name[17];
-    iopModuleName(internals, entry, name);
-    logPrintf("  %05lx %08lx %08lx %6ld %6lx %4ld %05lx %s\n   ", addr, iopRead(tag + offsetof(LiveScanTag, word)),
-              iopRead(tag + offsetof(LiveScanTag, handle)), (int32_t)iopRead(tag + offsetof(LiveScanTag, result)),
-              iopRead(tag + offsetof(LiveScanTag, status)), iopRead(tag + offsetof(LiveScanTag, initPriority)), entry & 0x1fffff, name);
-    for (int w = 0; (w < 16) && (addr >= 8); w++)
-      logPrintf(" %08lx", iopReadCode(addr - 8 + w * 4));
-    logPrintf("\n");
+    logPrintf("  %08lx %05lx %6lx %4ld %4ld %4ld %s\n", iopRead(thread + offsetof(LiveScanThread, handle)), entry & 0x1fffff,
+              iopRead(thread + offsetof(LiveScanThread, status)), iopRead(thread + offsetof(LiveScanThread, waitType)),
+              iopRead(thread + offsetof(LiveScanThread, priority)), iopRead(thread + offsetof(LiveScanThread, sio2)), name);
   }
 }
 
@@ -822,14 +803,14 @@ void findLiveScanLoader(uint8_t *osd) {
 }
 
 // Shown while scanning, by LIVESCAN_STAGE_*
-static const char *liveScanStageLabels[] = {"Scanning...",      "Reading mmceman...",         "Pausing the controller...", "Loading mmceman...",
-                                            "Scanning MMCE...", "Resuming the controller...", "Saving the list..."};
+static const char *liveScanStageLabels[] = {"Scanning...",      "Reading mmceman...",    "Locking the SIO2...", "Loading mmceman...",
+                                            "Scanning MMCE...", "Unlocking the SIO2...", "Saving the list..."};
 #define LIVESCAN_STAGES (sizeof(liveScanStageLabels) / sizeof(liveScanStageLabels[0]))
 
 // Describes a gamescan.irx error
 static const char *liveScanErrorName(int result) {
-  if (result == LIVESCAN_ERR_NO_THREADS)
-    return "no controller threads found";
+  if (result == LIVESCAN_ERR_NO_LOCK)
+    return "sio2man lock not found";
   if (result == LIVESCAN_ERR_MMCE_START)
     return "mmceman didn't start";
   if (result <= LIVESCAN_ERR_MMCE_LOAD)
@@ -1001,13 +982,12 @@ static void pollLiveScan(void) {
     menu->cacheLoaded = 1;
 
   if (settings.gamesLiveScan == 2) {
-    // Log of the scan: its result and the threads, with the suspend results
+    // Log of the scan: its result, and the threads after it
 #ifdef LIVESCAN
     liveScanReportClear();
 #endif
-    logPrintf("OSDMenu live scan log\nROMVER %s\n\nScan result %d, games %d, SIO2 threads suspended %ld, watchdog %ld, mmceman %ld\n",
-              settings.romver, result, count, iopRead(LIVESCAN_FIELD(suspendedCount)), iopRead(LIVESCAN_FIELD(watchdogResumed)),
-              iopRead(LIVESCAN_FIELD(mmceLoaded)));
+    logPrintf("OSDMenu live scan log\nROMVER %s\n\nScan result %d, games %d, watchdog %ld, mmceman %ld\n", settings.romver, result, count,
+              iopRead(LIVESCAN_FIELD(watchdogResumed)), iopRead(LIVESCAN_FIELD(mmceLoaded)));
     logLiveScanThreads();
     logPrintf("\nGames:\n");
     for (int i = 0; i < count; i++)
