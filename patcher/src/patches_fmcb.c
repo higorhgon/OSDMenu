@@ -563,6 +563,30 @@ static void logLiveScanThreads(void) {
               iopRead(thread + offsetof(LiveScanThread, status)), iopRead(thread + offsetof(LiveScanThread, priority)),
               iopRead(thread + offsetof(LiveScanThread, sio2)), (int32_t)iopRead(thread + offsetof(LiveScanThread, suspended)), name);
   }
+
+  // Raw data, to check how the thread IDs are made
+  uint32_t own = iopRead(LIVESCAN_FIELD(ownThreads));
+  logPrintf("\ngamescan threads %08lx %08lx, words from 8 bytes before %05lx:", own, iopRead(LIVESCAN_FIELD(ownThreads) + 4),
+            ((own >> 7) << 2) & 0x1ffffc);
+  for (int i = 0; i < 16; i++)
+    logPrintf("%s%08lx", (i % 8) ? " " : "\n  ", iopRead(LIVESCAN_FIELD(ownTcb) + i * 4));
+  uint32_t tags = iopRead(LIVESCAN_FIELD(tagCount));
+  if (tags > LIVESCAN_MAX_TAGS)
+    tags = LIVESCAN_MAX_TAGS;
+  logPrintf("\n\nThread tags:\n  addr  word     handle   result status prio entry  module, words from 8 bytes before\n");
+  for (uint32_t i = 0; i < tags; i++) {
+    uint32_t tag = LIVESCAN_FIELD(tags) + i * sizeof(LiveScanTag);
+    uint32_t addr = iopRead(tag + offsetof(LiveScanTag, addr));
+    uint32_t entry = iopRead(tag + offsetof(LiveScanTag, entry));
+    char name[17];
+    iopModuleName(internals, entry, name);
+    logPrintf("  %05lx %08lx %08lx %6ld %6lx %4ld %05lx %s\n   ", addr, iopRead(tag + offsetof(LiveScanTag, word)),
+              iopRead(tag + offsetof(LiveScanTag, handle)), (int32_t)iopRead(tag + offsetof(LiveScanTag, result)),
+              iopRead(tag + offsetof(LiveScanTag, status)), iopRead(tag + offsetof(LiveScanTag, initPriority)), entry & 0x1fffff, name);
+    for (int w = 0; (w < 16) && (addr >= 8); w++)
+      logPrintf(" %08lx", iopReadCode(addr - 8 + w * 4));
+    logPrintf("\n");
+  }
 }
 
 // Lists the library versions, the number of exports of the thread libraries and the IOP modules
@@ -708,10 +732,16 @@ static void sendLiveScanLog(GamesSubmenu *menu, const char *label, int fail) {
   menuInfo->currentEntry = 2;
 }
 
-// First "Refresh list" with games_live_scan = 2: the boot report, the IOP state and the threads,
+// First "Refresh list" with games_live_scan = 2: the IOP state on screen and the threads in the log,
 // listed without suspending them. The next "Refresh list" scans
 static void startLiveScanLog(GamesSubmenu *menu) {
   showIopDiagnostics(menu);
+  // The boot report and the IOP state were already checked, so the log only has the threads,
+  // which need most of the report buffer
+#ifdef LIVESCAN
+  liveScanReportClear();
+#endif
+  logPrintf("OSDMenu live scan threads\nROMVER %s\n", settings.romver);
   logLiveScanThreads();
   liveScanLogWritten = 1;
   sendLiveScanLog(menu, "Refresh list", 0);

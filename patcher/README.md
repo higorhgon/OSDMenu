@@ -169,10 +169,10 @@ These options are also read by the **launcher**:
   If the scan takes more than 20 seconds, the threads are resumed anyway.
   Errors are shown in the "Refresh list" label, and the next "Refresh list" falls back to the launcher.
   With `games_live_scan = 2`, the first "Refresh list" writes a diagnostics log instead of scanning, without suspending
-  anything: `gamescan.irx` writes `mc?:/SYS-CONF/OSDMLIVE-<YYMMDD>-<HHMMSS>.LOG` (console clock) with the boot report
-  (OSDSYS module loading code), the IOP state (library versions, export tables, the `sio2man` lock code and every IOP
-  module OSDSYS loaded) and the IOP threads (entry point, module, status and priority). The log name is shown in the
-  "Refresh list" label, and the IOP state also in the Games submenu. The next "Refresh list" scans and writes another
+  anything: `gamescan.irx` writes `mc?:/SYS-CONF/OSDMLIVE-<YYMMDD>-<HHMMSS>.LOG` (console clock) with the IOP threads
+  (entry point, module, status and priority) and every thread tag found in IOP RAM with the thread ID made from it.
+  The log name is shown in the "Refresh list" label, and the IOP state (library versions and every IOP module OSDSYS
+  loaded) in the Games submenu. The next "Refresh list" scans and writes another
   log with the scan result and the threads it suspended. `mc?:/SYS-CONF/OSDMLIVE.LOG` is also written on boot.
   May break OSDSYS memory card or controller access
 - `games_return_path` — ELF to run after "Refresh list" or a failed game launch (e.g. `mc?:/BOOT/BOOT.ELF`). When not set, the launcher reopens OSDMenu (with the games submenu open) from the path it was started from, then tries `mc?:/BOOT/osdmenu.elf`, and only falls back to the original OSDSYS if both fail

@@ -25,7 +25,7 @@
 #define LIVESCAN_MAGIC0 0x4d44534f // "OSDM"
 #define LIVESCAN_MAGIC1 0x4556494c // "LIVE"
 #define LIVESCAN_MAGIC2 0x4e414353 // "SCAN"
-#define LIVESCAN_MAGIC3 0x33303030 // "0003"
+#define LIVESCAN_MAGIC3 0x34303030 // "0004"
 
 #define LIVESCAN_IOP_RAM 0xbc000000 // IOP RAM as seen from the EE (uncached)
 #define LIVESCAN_IOP_RAM_SIZE 0x200000
@@ -63,6 +63,19 @@
 #define LIVESCAN_ERR_NO_THREADS -4000 // No SIO2 thread found to suspend
 
 #define LIVESCAN_MAX_THREADS 48
+
+#define LIVESCAN_MAX_TAGS 64
+
+// Word with the thread tag found in IOP RAM, for the diagnostics log
+typedef struct {
+  unsigned int addr;
+  unsigned int word;
+  int handle;       // Thread ID made from addr and the ID in word
+  int result;       // ReferThreadStatus() result
+  unsigned int status;
+  unsigned int initPriority;
+  unsigned int entry;
+} LiveScanTag;
 
 // Thread found in IOP RAM (all words, so the EE can read them one at a time)
 typedef struct {
@@ -102,6 +115,9 @@ typedef struct {
   unsigned int tagCount;             // Words with the thread tag found in IOP RAM
   unsigned int threadCount;          // Threads in threads
   LiveScanThread threads[LIVESCAN_MAX_THREADS];
+  int ownThreads[2];                 // gamescan.irx's own thread IDs (scan, watchdog), to compare with the tags
+  unsigned int ownTcb[16];           // Words around the address the scan thread ID points to, from 8 bytes before
+  LiveScanTag tags[LIVESCAN_MAX_TAGS];
   volatile unsigned int logRequest;  // LIVESCAN_LOG_*
   volatile int logResult;            // Bytes written, or < 0 on error
   unsigned int logLength;            // Bytes in logBuffer

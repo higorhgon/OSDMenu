@@ -341,6 +341,11 @@ static void listThreads(int suspend) {
   shared.threadCount = 0;
   shared.tagCount = 0;
 
+  // Words around the address gamescan.irx's own thread ID points to, if it's made like THREAD_HANDLE()
+  unsigned int own = (((unsigned int)shared.ownThreads[0] >> 7) << 2) & 0x1ffffc;
+  for (int i = 0; i < 16; i++)
+    shared.ownTcb[i] = ((own >= 8) && (own + 56 < LIVESCAN_IOP_RAM_SIZE)) ? *(volatile unsigned int *)(own - 8 + i * 4) : 0;
+
   for (unsigned int addr = 0x800; addr < LIVESCAN_IOP_RAM_SIZE; addr += 4) {
     // Thread IDs stored here could look like a tag
     if (((addr >= (unsigned int)&shared) && (addr < (unsigned int)&shared + sizeof(shared))) ||
@@ -353,10 +358,21 @@ static void listThreads(int suspend) {
 
     int handle = THREAD_HANDLE(addr, word >> 16);
     memset(&info, 0, sizeof(info));
-    if (ReferThreadStatus(handle, &info) != 0)
+    int result = ReferThreadStatus(handle, &info);
+    unsigned int status = info.status;
+    if (shared.tagCount <= LIVESCAN_MAX_TAGS) {
+      LiveScanTag *tag = &shared.tags[shared.tagCount - 1];
+      tag->addr = addr;
+      tag->word = word;
+      tag->handle = handle;
+      tag->result = result;
+      tag->status = status;
+      tag->initPriority = info.initPriority;
+      tag->entry = (unsigned int)info.entry;
+    }
+    if (result != 0)
       continue;
     // Skip anything that doesn't look like a thread
-    unsigned int status = info.status;
     if (((status != THS_RUN) && (status != THS_READY) && (status != THS_WAIT) && (status != THS_SUSPEND) && (status != THS_WAITSUSPEND) &&
          (status != THS_DORMANT)) ||
         (info.initPriority < 1) || (info.initPriority > 127) || (((unsigned int)info.entry & 0x1fffff) < 0x800))
@@ -601,6 +617,8 @@ int _start(int argc, char *argv[]) {
   if (watchdog < 0)
     return MODULE_NO_RESIDENT_END;
 
+  shared.ownThreads[0] = tid;
+  shared.ownThreads[1] = watchdog;
   StartThread(watchdog, NULL);
   StartThread(tid, NULL);
 
