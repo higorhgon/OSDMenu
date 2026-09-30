@@ -42,6 +42,8 @@ app_gameid = 0
 # games_mmce_gameid = 1
 # games_launcher = neutrino
 # games_opl_path = mmce?:/APPS/OPL/RIPTOPL.ELF
+# Experimental (MMCE only): 1 makes "Refresh list" scan without leaving OSDMenu, pausing the controller
+# for the duration of the scan; 2 also writes diagnostics logs to mc?:/SYS-CONF/ (see patcher/README.md)
 # games_live_scan = 0
 # --------------------------------------------------
 # PSX menu: enabling any psx_device_* adds a "PSX >" entry for PS1 games run by Ember
