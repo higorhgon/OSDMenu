@@ -849,11 +849,10 @@ void getButtonsPanelType(int type) {
 
 #ifndef HOSD
 // Button prompts of the games submenus: "Back" replaces "Version", and "Sort" is added in between.
-// The icon types of Circle and Square are not known, so they are derived from the types OSDSYS
-// uses for Enter (Cross, or Circle on Japanese consoles) and Version (Triangle), assuming the
-// icons are consecutive in either the Circle, Cross, Square, Triangle or the Triangle, Circle,
-// Cross, Square order. In both, Circle is right before Cross and Square right after it.
-// If the difference between Enter and Version fits neither, only the texts are shown.
+// OSDSYS only draws the Enter (Cross, or Circle on Japanese consoles) and Version (Triangle) icons
+// in the main menu, so Circle and Square are derived from Version. The icon types are Square,
+// Triangle, Cross, Circle in that order (seen on ROM 2.30: 2, 3, 4, 5).
+// If Enter is neither Cross nor Circle in that order, only the texts are shown.
 static int enterIconType = -1;
 static int versionIconType = -1;
 static int backIconType = -1;
@@ -875,15 +874,16 @@ static void deriveSubmenuIcons(void) {
   if ((enterIconType < 0) || (versionIconType < 0))
     return;
 
-  int diff = versionIconType - enterIconType;
-  if ((diff == 2) || (diff == -2)) { // Enter is Cross: back with Circle
-    backIconType = enterIconType - 1;
-    sortIconType = enterIconType + 1;
-  } else if ((diff == 3) || (diff == -1)) { // Enter is Circle: back with Cross
-    backIconType = enterIconType + 1;
-    sortIconType = enterIconType + 2;
-  }
-  if ((backIconType < 0) || (sortIconType < 0))
+  int cross = versionIconType + 1;
+  int circle = versionIconType + 2;
+  if (enterIconType == cross) // Enter is Cross: back with Circle
+    backIconType = circle;
+  else if (enterIconType == circle) // Enter is Circle: back with Cross
+    backIconType = cross;
+  else
+    return;
+  sortIconType = versionIconType - 1; // Square
+  if (sortIconType < 0)
     backIconType = sortIconType = -1;
 }
 
@@ -928,17 +928,15 @@ void drawNonselectableEntryRight(int X, int Y, uint32_t *color, int alpha, const
       return;
     }
     if (showSubmenuPrompts()) {
-      char sortLabel[64];
       if (settings.buttonDebug) {
-        // "e<Enter> v<Version> s<types seen in other panels>"
-        char seen[24] = {0};
-        for (int i = 0, len = 0; (i < seenIconCount) && (len < (int)sizeof(seen) - 4); i++)
-          len += snprintf(&seen[len], sizeof(seen) - len, "%s%d", i ? "," : "", seenIconTypes[i]);
-        snprintf(sortLabel, sizeof(sortLabel), "Sort: %s e%d v%d s%s", activeMenu->sortRecent ? "[Recent]" : "[A-Z]", enterIconType, versionIconType,
-                 seen);
-      } else
-        snprintf(sortLabel, sizeof(sortLabel), "Sort: %s", activeMenu->sortRecent ? "[Recent]" : "[A-Z]");
-      DrawNonSelectableItem(sortPromptX() + 28, settings.versionY, color, alpha, sortLabel);
+        // "e<Enter> v<Version> b<Back> s<Sort> seen:<types seen in other panels>", on its own line above the prompts
+        char debug[64];
+        int len = snprintf(debug, sizeof(debug), "e%d v%d b%d s%d seen:", enterIconType, versionIconType, backIconType, sortIconType);
+        for (int i = 0; (i < seenIconCount) && (len < (int)sizeof(debug) - 4); i++)
+          len += snprintf(&debug[len], sizeof(debug) - len, "%s%d", i ? "," : "", seenIconTypes[i]);
+        DrawNonSelectableItem(settings.enterX, settings.versionY - 18, color, alpha, debug);
+      }
+      DrawNonSelectableItem(sortPromptX() + 28, settings.versionY, color, alpha, activeMenu->sortRecent ? "Sort: [Recent]" : "Sort: [A-Z]");
       DrawNonSelectableItem(settings.versionX + 28, settings.versionY, color, alpha, "Back");
       return;
     }
