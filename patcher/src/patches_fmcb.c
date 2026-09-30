@@ -235,7 +235,7 @@ static void pageGamesMenu(int direction) {
   menuInfo->currentEntry = entry;
 }
 
-// Handles the submenu buttons OSDSYS doesn't: Circle (Triangle in menu groups) to go back,
+// Handles the submenu buttons OSDSYS doesn't: Circle (Cross on Japanese consoles) to go back,
 // Square to change the sort order and Triangle to add a favorite in a games submenu, Left/Right to move a page
 static void handleSubmenuButtons(void) {
   uint16_t pressed = padNewPresses();
@@ -244,7 +244,7 @@ static void handleSubmenuButtons(void) {
 
   if ((pressed & PADB_TRIANGLE) && activeMenu)
     toggleFavorite();
-  else if (pressed & padBackButtons() & (activeMenu ? ~PADB_TRIANGLE : 0xffff))
+  else if (pressed & padBackButtons())
     closeSubmenu();
   else if ((pressed & PADB_SQUARE) && activeMenu)
     toggleGamesSort();
@@ -1258,6 +1258,8 @@ static void pollSubmenu(void) {
     return;
   }
 #endif
+  // OSDSYS would open the Version screen with Triangle
+  padHideTriangle(activeMenu || activeGroup);
   if (activeMenu || activeGroup)
     handleSubmenuButtons();
 }
@@ -1616,7 +1618,7 @@ void getButtonsPanelType(int type) {
 
 #ifndef HOSD
 // Button prompts of the games submenus: "Back" replaces "Version", and the sort order (Square)
-// and "Fav" (Triangle) are added in between.
+// and "Favorite" (Triangle) are added in between.
 // OSDSYS only draws the Enter (Cross, or Circle on Japanese consoles) and Version (Triangle) icons
 // in the main menu, so Circle and Square are derived from Version. The icon types are Square,
 // Triangle, Cross, Circle in that order (seen on ROM 2.30: 2, 3, 4, 5).
@@ -1658,7 +1660,7 @@ static void deriveSubmenuIcons(void) {
 // Returns 1 when the main menu button panel shows a games submenu
 static int showSubmenuPrompts(void) { return (ButtonsPanel_Type == MAINMENU_PANEL) && ((activeMenu && !liveScanActive) || activeGroup); }
 
-// X coordinates of the sort and "Fav" prompts: Enter, sort, "Fav" and Back are evenly spaced
+// X coordinates of the sort and "Favorite" prompts: Enter, sort, "Favorite" and Back are evenly spaced
 static int sortPromptX(void) { return settings.enterX + (settings.versionX - settings.enterX) / 3; }
 static int favPromptX(void) { return settings.enterX + (settings.versionX - settings.enterX) * 2 / 3; }
 #endif
@@ -1700,14 +1702,15 @@ void drawNonselectableEntryRight(int X, int Y, uint32_t *color, int alpha, const
       if (settings.buttonDebug) {
         // "e<Enter> v<Version> b<Back> s<Sort> seen:<types seen in other panels>", on its own line above the prompts
         char debug[64];
-        int len = snprintf(debug, sizeof(debug), "e%d v%d b%d s%d seen:", enterIconType, versionIconType, backIconType, sortIconType);
+        int len = snprintf(debug, sizeof(debug), "e%d v%d b%d s%d r%lx seen:", enterIconType, versionIconType, backIconType, sortIconType,
+                           padReadAddr);
         for (int i = 0; (i < seenIconCount) && (len < (int)sizeof(debug) - 4); i++)
           len += snprintf(&debug[len], sizeof(debug) - len, "%s%d", i ? "," : "", seenIconTypes[i]);
         DrawNonSelectableItem(settings.enterX, settings.versionY - 18, color, alpha, debug);
       }
       // Short texts, since the four prompts share the space of two
-      DrawNonSelectableItem(sortPromptX() + 28, settings.versionY, color, alpha, activeMenu->sortRecent ? "Recent" : "A-Z");
-      DrawNonSelectableItem(favPromptX() + 28, settings.versionY, color, alpha, "Fav");
+      DrawNonSelectableItem(sortPromptX() + 28, settings.versionY, color, alpha, activeMenu->sortRecent ? "[Recent]" : "[A-Z]");
+      DrawNonSelectableItem(favPromptX() + 28, settings.versionY, color, alpha, "Favorite");
       DrawNonSelectableItem(settings.versionX + 28, settings.versionY, color, alpha, "Back");
       return;
     }

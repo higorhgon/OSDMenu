@@ -20,7 +20,13 @@ void patchPadPortOpen(uint8_t *osd);
 // Returns the buttons of the first controller pressed since the last call
 uint16_t padNewPresses(void);
 
-// Returns the buttons that go back: Circle (Cross on Japanese consoles) and Triangle
+// Returns the button that goes back: Circle (Cross on Japanese consoles)
 uint16_t padBackButtons(void);
+
+// Hides Triangle from OSDSYS, which would open the Version screen, while hide is set
+void padHideTriangle(int hide);
+
+// Address of the hooked scePadRead(), 0 if it wasn't found (shown by games_button_debug)
+extern uint32_t padReadAddr;
 
 #endif

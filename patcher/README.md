@@ -144,8 +144,10 @@ In both submenus:
   or else the next time a game is launched or the list is refreshed
 - Left/Right move the cursor a page (`OSDSYS_num_displayed_items`) up or down
 
-The button prompts at the bottom show "Back" instead of "Version", the current sort order (`A-Z` or `Recent`) and "Fav"
-while a submenu is open.
+The button prompts at the bottom show "Back" instead of "Version", the current sort order (`[A-Z]` or `[Recent]`) and
+"Favorite" while a submenu is open. Triangle is hidden from OSDSYS while a submenu or group is shown, so it doesn't open the
+Version screen (the patcher finds `scePadRead()` after `scePadPortOpen()` for this; `games_button_debug = 1` shows its
+address as `r`, 0 if it wasn't found).
 The Circle and Square icons are derived from the icons OSDSYS uses for Enter and Version (Triangle); if they can't be derived,
 only the texts are shown. `games_button_debug = 1` shows the icon types in a line above the prompts: `e` (Enter),
 `v` (Version), `b` (Back), `s` (Sort) and `seen` (icons seen in other screens such as System Configuration, which shows
@@ -205,7 +207,7 @@ group_OSDSYS_ITEM_10 = Apps
 ```
 Each group is shown as a `<group> >` entry that opens a submenu with "< Back" and its entries in `OSDMENU.CNF` order.
 The groups are listed in alphabetical order after "Games >" and "PSX >", followed by the entries without a group.
-Circle/Triangle go back and Left/Right move a page. Up to 32 groups are supported.
+Circle goes back and Left/Right move a page. Up to 32 groups are supported.
 Group names can contain spaces, and are case-sensitive (`Apps` and `apps` are different groups).
 
 By default, OSDMenu uses custom menu coordinates to make the menu appear in the center of the screen.  
