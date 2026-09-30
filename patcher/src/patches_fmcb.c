@@ -312,10 +312,7 @@ static void failLiveScan(const char *label) {
   liveScanDisabled = 1;
 }
 
-// Returns the EE address of the export table of the IOP library name (up to 8 characters), or 0 if
-// it's not loaded, by looking for the table (magic 0x41e00000, version at +8, name at +12) in IOP RAM
-// Returns 1 if value looks like the address of an IOP function: in IOP RAM (with or without the kseg0 bit) or in ROM.
-// Import tables have the same header as export tables, but hold jr/j instructions instead
+// Returns 1 if value looks like the address of an IOP function: in IOP RAM (with or without the kseg0 bit) or in ROM
 static int isIopFunctionAddress(uint32_t value) {
   if (!value || (value & 3))
     return 0;
@@ -324,12 +321,16 @@ static int isIopFunctionAddress(uint32_t value) {
   return (value & 0xfff00000) == 0xbfc00000;
 }
 
-// Returns 1 if the IOP RAM at addr (EE address) holds an export table: magic 0x41e00000, a printable
-// name at +12 and, from +20, function addresses or NULL, with at least one function among exports 4-7.
-// Import tables have the same header, but hold instruction pairs: "jr ra; addiu zero, zero, <index>"
+// IRX export and import tables have the same header (magic, next, version, mode, name[8]).
+// Export tables hold function addresses, import tables instruction pairs: "jr ra; addiu zero, zero, <index>"
 // before they're linked and "j <function>; nop" after
+#define IRX_EXPORT_MAGIC 0x41c00000
+#define IRX_IMPORT_MAGIC 0x41e00000
+
+// Returns 1 if the IOP RAM at addr (EE address) holds an export table: export magic, a printable
+// name at +12 and, from +20, function addresses or NULL, with at least one function among exports 4-7
 static int isExportTable(volatile uint32_t *w) {
-  if (w[0] != 0x41e00000)
+  if (w[0] != IRX_EXPORT_MAGIC)
     return 0;
   for (int i = 0; i < 8; i++) {
     char c = ((volatile char *)&w[3])[i];
@@ -532,11 +533,11 @@ static int showIopDiagnostics(GamesSubmenu *menu) {
   logPrintf("\nExport tables:\n");
   iopForEachExportTable(logExportTable, NULL);
 
-  // Raw headers of the first tables with the export/import magic, classified as E(xport) or I(mport)
-  logPrintf("\nTables with magic 41e00000 (first 40):\n");
+  // Raw headers of the tables with the export magic, marked E if they pass isExportTable()
+  logPrintf("\nTables with the export magic (first 80):\n");
   int tables = 0;
-  for (uint32_t addr = LIVESCAN_IOP_RAM; (addr < LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - 64) && (tables < 40); addr += 4) {
-    if (iopRead(addr) != 0x41e00000)
+  for (uint32_t addr = LIVESCAN_IOP_RAM; (addr < LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - 64) && (tables < 80); addr += 4) {
+    if (iopRead(addr) != IRX_EXPORT_MAGIC)
       continue;
     uint32_t words[2] = {iopRead(addr + 12), iopRead(addr + 16)};
     char name[9] = {0};
@@ -549,7 +550,7 @@ static int showIopDiagnostics(GamesSubmenu *menu) {
     int isExport = isExportTable((volatile uint32_t *)addr);
     ee_kmode_exit();
     EI();
-    logPrintf("  %c @%05lx %-8s v%04lx:", isExport ? 'E' : 'I', addr - LIVESCAN_IOP_RAM, name, iopRead(addr + 8) & 0xffff);
+    logPrintf("  %c @%05lx %-8s v%04lx:", isExport ? 'E' : '?', addr - LIVESCAN_IOP_RAM, name, iopRead(addr + 8) & 0xffff);
     for (int e = 0; e < 8; e++)
       logPrintf(" %08lx", iopRead(addr + 20 + e * 4));
     logPrintf("\n");
