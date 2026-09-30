@@ -189,6 +189,12 @@ but only if `<device>:/EMBER/ember.elf` exists, since Ember loads games relative
 ```
 Ember uses the storage drivers that are already loaded, so the launcher loads the device's drivers before starting it.
 
+Ember has no in-game reset, so the launcher also loads `igr.irx` (`launcher/iop/igr`) before starting it, unless
+`psx_igr = 0`. Since Ember doesn't reset the IOP, the module keeps running during the game: it hooks sio2man's transfer
+function (export 25, like mmceman) and reads the buttons from the controller replies on ports 0 and 1, whatever library
+the game uses. Holding **L1 + L2 + R1 + R2 + L3 + R3** turns the console off (after stopping the DEV9 devices).
+Returning to OSDMenu with a combo would also need code resident on the EE, which isn't there yet.
+
 ### Config handler
 When the launcher receives a path that ends with `.CNF`, `.cnf`, `.CFG` or `.cfg`,
 it will run the [quickboot handler](#quickboot-handler) using this file.

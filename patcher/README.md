@@ -191,6 +191,7 @@ These options are also read by the **launcher**:
   May break OSDSYS memory card or controller access
 - `games_return_path` — ELF to run after "Refresh list" or a failed game launch (e.g. `mc?:/BOOT/BOOT.ELF`). When not set, the launcher reopens OSDMenu (with the games submenu open) from the path it was started from, then tries `mc?:/BOOT/osdmenu.elf`, and only falls back to the original OSDSYS if both fail
 - `psx_device_usb`, `psx_device_mx4sio`, `psx_device_mmce` — enable scanning each device type for PS1 games (default: all disabled)
+- `psx_igr` — in PS1 games, holding L1 + L2 + R1 + R2 + L3 + R3 turns the console off (default: 1, see the launcher's README)
 
 To add a custom separator to the menu, add a `name_OSDSYS_ITEM_???` entry that starts with `$!`.  
 This will make the entry inactive, but still show it in the OSD without the `$!` prefix.

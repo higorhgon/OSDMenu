@@ -31,6 +31,7 @@ typedef struct {
   int useOPL;                            // Launch games with oplPath instead of Neutrino when possible
   char *oplPath;                         // Path to OPL (e.g. RiptOPL), used when useOPL is set
   int mmceGameID;                        // Send the game ID to MMCE devices so they switch to the game's memory card
+  int psxIGR;                            // Load igr.irx for the Ember games: L1+L2+R1+R2+L3+R3 turns the console off
 } GamesConfig;
 
 // handler_games.c

@@ -890,7 +890,8 @@ static void launchGame(GamesConfig *cfg, const char *bsd, char *isoPath, const c
 // Launches a PS1 game with Ember. gamePath is the game folder, <device>:/EMBER/games/<name>.
 // Ember takes the folder name as its only argument and finds it relative to argv[0],
 // using the storage drivers that are already loaded. Only returns on failure.
-static void launchEmber(const char *gamePath) {
+// Ember doesn't reset the IOP, so igr.irx (psx_igr) keeps watching the controller while the game runs
+static void launchEmber(GamesConfig *cfg, const char *gamePath) {
   const char *games = strstr(gamePath, "/games/");
   if (!games) {
     msg("PSX: invalid game path %s\n", gamePath);
@@ -905,6 +906,9 @@ static void launchEmber(const char *gamePath) {
   DeviceType mask = storageDevice(elfPath);
   if (mask && initModules(mask))
     return;
+  // Not being able to turn the console off with the controller doesn't stop the game
+  if (cfg->psxIGR && (loadIGRModule() < 0))
+    DPRINTF("PSX: failed to load igr.irx\n");
 
   char *argv[] = {elfPath, folder};
   launchGamesELF(2, argv);
@@ -918,7 +922,7 @@ static void launchSelected(GamesConfig *cfg, int index) {
   scr_printf(" Iniciando %s...\n", g->name);
 
   if (cfg->kind == GamesKind_PSX)
-    launchEmber(g->path);
+    launchEmber(cfg, g->path);
   else
     launchGame(cfg, g->neutrinoDriver, g->path, g->id);
 
@@ -1232,7 +1236,7 @@ static int launchCachedGame(GamesConfig *cfg, int idx) {
       msg("PSX: game %d not found in %s, try refreshing the list\n", idx, path);
       return -ENOENT;
     }
-    launchEmber(isoPath);
+    launchEmber(cfg, isoPath);
     msg("PSX: failed to launch %s\n", isoPath);
     return -ENOENT;
   }

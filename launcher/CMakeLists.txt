@@ -80,8 +80,20 @@ endif()
 # Games menu support (depends on OSDM for the special 'games' path dispatch)
 if(LAUNCHER_GAMES_MENU)
   list(APPEND EE_SOURCES src/handler_games.c)
-  list(APPEND IRX_FILES padman.irx)
+  list(APPEND IRX_FILES padman.irx igr.irx)
   add_compile_definitions(LAUNCHER_GAMES_MENU)
+
+  # Button combos for the PS1 games launched via Ember (psx_igr)
+  set(IGR_IRX "${CMAKE_CURRENT_SOURCE_DIR}/iop/igr/igr.irx")
+  file(GLOB IGR_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/iop/igr/src/*" "${CMAKE_CURRENT_SOURCE_DIR}/iop/igr/src/include/*"
+       "${CMAKE_CURRENT_SOURCE_DIR}/iop/igr/Makefile")
+  add_custom_command(
+        OUTPUT ${IGR_IRX}
+        COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_CURRENT_SOURCE_DIR}/iop/igr" ${CMAKE_MAKE_PROGRAM}
+        DEPENDS ${IGR_SOURCES}
+        COMMENT "Building igr"
+        VERBATIM
+    )
 endif()
 
 # MMCE support
@@ -251,6 +263,9 @@ foreach(irx ${IRX_FILES})
     # Copied under another name, since the generated source is named after the IRX file
     configure_file("$ENV{PS2SDK}/iop/irx/smap.irx" "${CMAKE_CURRENT_BINARY_DIR}/netman_smap.irx" COPYONLY)
     irx_to_source("${CMAKE_CURRENT_BINARY_DIR}/netman_smap.irx" irx_source "netman_smap_irx" "")
+  elseif(irx_name STREQUAL "igr")
+    # igr is built from iop/igr
+    irx_to_source("${IGR_IRX}" irx_source "igr_irx" "")
   elseif(irx_name STREQUAL "mmceman")
     # mmceman is built from submodule
     irx_to_source("${MMCEMAN_IRX}" irx_source "mmceman_irx" "")

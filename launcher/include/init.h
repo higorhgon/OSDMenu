@@ -15,6 +15,9 @@ void applyXPARAM(char *gameID);
 // Initializes IOP modules for given device type
 int initModules(DeviceType device);
 
+// Loads igr.irx, which watches the controller for the in-game button combos (psx_igr)
+int loadIGRModule(void);
+
 #if defined(UDPFS) || defined(SMB)
 // Network settings read from OPL's conf_network.cfg (and the ETH prefix from conf_opl.cfg).
 // Used for the SMB games list, and for the UDPFS PS2 IP address when IPCONFIG.DAT doesn't exist

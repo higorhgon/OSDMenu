@@ -117,6 +117,7 @@ int handleOSDM(int argc, char *argv[]) {
   strcpy(gamesCfg.cdFolder, "CD");
   strcpy(gamesCfg.dvdFolder, "DVD");
   gamesCfg.mmceGameID = 1;
+  gamesCfg.psxIGR = 1;
 #endif
 
   // Temporary path and argument lists
@@ -280,6 +281,10 @@ int handleOSDM(int argc, char *argv[]) {
     }
     if (!strncmp(lineBuffer, "psx_device_mmce", 15)) {
       gamesCfg.psxUseMMCE = atoi(valuePtr);
+      continue;
+    }
+    if (!strncmp(lineBuffer, "psx_igr", 7)) {
+      gamesCfg.psxIGR = atoi(valuePtr);
       continue;
     }
 #endif

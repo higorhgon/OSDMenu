@@ -40,6 +40,7 @@ IRX_DEFINE(mmceman);
 
 #ifdef LAUNCHER_GAMES_MENU
 IRX_DEFINE(padman);
+IRX_DEFINE(igr);
 #endif
 
 #if defined(ATA) || defined(APA)
@@ -288,6 +289,18 @@ int initModules(DeviceType device) {
   currentDevice = device;
   return 0;
 }
+
+#ifdef LAUNCHER_GAMES_MENU
+// Loads igr.irx, which watches the controller for the in-game button combos (psx_igr).
+// Must be loaded after sio2man and without resetting the IOP afterwards
+int loadIGRModule(void) {
+  int iopret = 0;
+  int ret = SifExecModuleBuffer(igr_irx, size_igr_irx, 0, NULL, &iopret);
+  if (ret < 0)
+    return ret;
+  return (iopret == 1) ? -1 : 0; // MODULE_NO_RESIDENT_END: sio2man wasn't found
+}
+#endif
 
 // Reboots the IOP and executes a path from ROM via LoadExecPS2
 int execROMPath(int argc, char *argv[]) {
