@@ -345,26 +345,6 @@ static int iopLibraryVersion(const char *name) {
   return table ? (int)(iopRead(table + 8) & 0xffff) : -1;
 }
 
-// Disables the MODLOAD check that refuses to load modules from devices other than rom0:,
-// which is back after OSDSYS resets the IOP. Like PS2SDK's sbv_patch_disable_prefix_check(),
-// replaces MODLOAD export 15 with "return 0". Returns the patched IOP address, or < 0 on error
-static int liveScanPrefixPatched = 0;
-static int patchModloadPrefixCheck(void) {
-  if (liveScanPrefixPatched)
-    return liveScanPrefixPatched;
-
-  uint32_t table = iopFindExportTable("modload");
-  if (!table)
-    return -1;
-  uint32_t func = iopRead(table + 20 + 15 * 4) & 0x1fffff; // Exports start after the 20-byte header
-  if (!func || (func >= LIVESCAN_IOP_RAM_SIZE - 8))
-    return -2;
-  iopWrite(LIVESCAN_IOP_RAM + func, 0x03e00008);     // jr    ra
-  iopWrite(LIVESCAN_IOP_RAM + func + 4, 0x00001021); // move  v0, zero
-  liveScanPrefixPatched = func;
-  return func;
-}
-
 // Loads live scan module i (0: iomanX, 1: mmceman, 2: gamescan) from the memory card
 // with OSDSYS's sceSifLoadModule(). Returns its result
 static int loadLiveScanModule(int i) {
@@ -384,7 +364,6 @@ static int loadLiveScanModule(int i) {
 // where module number is 1 for iomanX, 2 for mmceman and 3 for gamescan
 static int loadLiveScanModules(void) {
   liveScanModulesLoaded = 1;
-  patchModloadPrefixCheck();
   for (int i = 0; i < 3; i++) {
     int ret = loadLiveScanModule(i);
     if (ret < 0)
@@ -417,24 +396,13 @@ static void runLiveScanDiagStep(GamesSubmenu *menu) {
              settings.liveScanLoader);
     break;
   case 1:
-    ret = patchModloadPrefixCheck();
-    snprintf(label, sizeof(label), "Refresh [1/5 prefix %x]", ret);
-    break;
-  case 2: {
-    // Loading a module that is already there only tests the loader: it should fail right away
-    int (*sceSifLoadModule)(const char *path, int argLength, const char *args) = (void *)settings.liveScanLoader;
-    ret = sceSifLoadModule("rom0:SIO2MAN", 0, NULL);
-    snprintf(label, sizeof(label), "Refresh [2/5 test load %d]", ret);
-    break;
-  }
-  case 3:
-  case 4:
-  case 5: {
+  case 2:
+  case 3: {
     static const char *names[] = {"iomanX", "mmceman", "gamescan"};
     liveScanModulesLoaded = 1;
-    ret = loadLiveScanModule(liveScanDiagStep - 3);
-    snprintf(label, sizeof(label), "Refresh [%d/5 %s %d]", liveScanDiagStep, names[liveScanDiagStep - 3], ret);
-    if ((liveScanDiagStep == 5) && (ret >= 0)) {
+    ret = loadLiveScanModule(liveScanDiagStep - 1);
+    snprintf(label, sizeof(label), "Refresh [%d/3 %s %d]", liveScanDiagStep, names[liveScanDiagStep - 1], ret);
+    if ((liveScanDiagStep == 3) && (ret >= 0)) {
       liveScanDiagStep++;
       waitForLiveScanModule(menu);
       return;

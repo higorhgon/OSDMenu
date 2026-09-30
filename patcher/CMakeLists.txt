@@ -160,7 +160,26 @@ if(NOT PATCHER_HOSD AND LAUNCHER_GAMES_MENU AND LAUNCHER_MMCE)
     )
   irx_to_source("iomanX.irx" irx_source "iomanX_irx" "._irx")
   list(APPEND IRX_SOURCES ${irx_source})
-  irx_to_source("${launcher_binary_dir}/mmceman.irx" irx_source "mmceman_irx" "._irx")
+  # mmceman built from a copy of the launcher's submodule that also locks the SIO2 through
+  # the sio2man 1.2 interface of OSDSYS's rom0:SIO2MAN (see iop/mmceman_sio2lock.cmake)
+  set(MMCEMAN_LS_DIR "${PATCHER_BINARY_DIR}/mmceman_ls")
+  set(MMCEMAN_LS_IRX "${MMCEMAN_LS_DIR}/irx/mmceman.irx")
+  file(GLOB MMCEMAN_LS_SOURCES "${CMAKE_SOURCE_DIR}/launcher/iop/mmceman/mmceman/src/*" "${CMAKE_SOURCE_DIR}/launcher/iop/mmceman/mmceman/include/*"
+       "${CMAKE_SOURCE_DIR}/launcher/iop/mmceman/mmceman/Makefile")
+  add_custom_command(
+        OUTPUT ${MMCEMAN_LS_IRX}
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${MMCEMAN_LS_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${MMCEMAN_LS_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/launcher/iop/mmceman/mmceman/src" "${MMCEMAN_LS_DIR}/src"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/launcher/iop/mmceman/mmceman/include" "${MMCEMAN_LS_DIR}/include"
+        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/launcher/iop/mmceman/mmceman/Makefile" "${MMCEMAN_LS_DIR}/Makefile"
+        COMMAND ${CMAKE_COMMAND} -DFILE=${MMCEMAN_LS_DIR}/src/sio2man_hook.c -P "${PATCHER_SOURCE_DIR}/iop/mmceman_sio2lock.cmake"
+        COMMAND ${CMAKE_COMMAND} -E chdir "${MMCEMAN_LS_DIR}" ${CMAKE_MAKE_PROGRAM}
+        DEPENDS ${MMCEMAN_LS_SOURCES} "${PATCHER_SOURCE_DIR}/iop/mmceman_sio2lock.cmake"
+        COMMENT "Building mmceman for the live scan"
+        VERBATIM
+    )
+  irx_to_source("${MMCEMAN_LS_IRX}" irx_source "mmceman_irx" "._irx")
   list(APPEND IRX_SOURCES ${irx_source})
   irx_to_source("${GAMESCAN_IRX}" irx_source "gamescan_irx" "._irx")
   list(APPEND IRX_SOURCES ${irx_source})
