@@ -16,7 +16,7 @@
 extern uint8_t loader_elf[];
 extern int size_loader_elf;
 
-static char loaderArg[11] = "-la=\0\0\0\0\0\0\0";
+static char loaderArg[16] = "-la="; // Up to R, A, N/D, I, E, G
 static char elfMemArg[22] = {0};
 static char ioprpMemArg[22] = {0};
 
@@ -104,9 +104,14 @@ int loadELF(LoadOptions *options) {
     for (int i = 0; i < options->argc; i++)
       argv[i] = options->argv[i];
 
-    // Add loader arguments (ELF, IOPRP, GSM argument order is important)
+    // Add loader arguments. The loader takes them from the one right before "-la=" backwards,
+    // in the order of the letters (I, E, G), so they're added in the reverse order
     int argvOffset = argc;
     argc += options->argc;
+
+    // GSM argument
+    if (options->eGSM)
+      argv[argc - (argvOffset--)] = options->eGSM;
 
     // ELF argument
     if (elfMemArg[0] != '\0')
@@ -117,10 +122,6 @@ int loadELF(LoadOptions *options) {
       argv[argc - (argvOffset--)] = ioprpMemArg;
     else if (options->ioprpPath)
       argv[argc - (argvOffset--)] = options->ioprpPath;
-
-    // GSM argument
-    if (options->eGSM)
-      argv[argc - (argvOffset--)] = options->eGSM;
 
     // Loader arguments
     argv[argc - argvOffset] = loaderArg;
