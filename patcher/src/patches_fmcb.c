@@ -275,26 +275,22 @@ static void iopReadString(uint32_t addr, char *out, int size) {
   out[size - 1] = '\0';
 }
 
-static uint32_t findLiveScan(void) {
-  const uint32_t chunk = 0x10000; // Interrupts are re-enabled between chunks
+// Returns the EE address of the LiveScanShared structure between the EE addresses start and end, or 0
+static uint32_t findLiveScan(uint32_t start, uint32_t end) {
   uint32_t found = 0;
-  for (uint32_t start = LIVESCAN_IOP_RAM; !found && (start < LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE); start += chunk) {
-    uint32_t end = start + chunk;
-    if (end > LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - sizeof(LiveScanShared))
-      end = LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - sizeof(LiveScanShared);
-
-    DI();
-    ee_kmode_enter();
-    for (uint32_t addr = start; addr < end; addr += 16) {
-      volatile uint32_t *w = (volatile uint32_t *)addr;
-      if ((w[0] == LIVESCAN_MAGIC0) && (w[1] == LIVESCAN_MAGIC1) && (w[2] == LIVESCAN_MAGIC2) && (w[3] == LIVESCAN_MAGIC3)) {
-        found = addr;
-        break;
-      }
+  if (end > LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - sizeof(LiveScanShared))
+    end = LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - sizeof(LiveScanShared);
+  DI();
+  ee_kmode_enter();
+  for (uint32_t addr = start & ~3; addr < end; addr += 4) {
+    volatile uint32_t *w = (volatile uint32_t *)addr;
+    if ((w[0] == LIVESCAN_MAGIC0) && (w[1] == LIVESCAN_MAGIC1) && (w[2] == LIVESCAN_MAGIC2) && (w[3] == LIVESCAN_MAGIC3)) {
+      found = addr;
+      break;
     }
-    ee_kmode_exit();
-    EI();
   }
+  ee_kmode_exit();
+  EI();
   return found;
 }
 
@@ -404,11 +400,91 @@ static uint32_t iopFindExportTable(const char *name) {
   return iopForEachExportTable(matchExportName, nameWords);
 }
 
+// Reads a word of IOP code at the IOP address addr
+static uint32_t iopReadCode(uint32_t addr) { return iopRead(LIVESCAN_IOP_RAM + (addr & 0x1ffffc)); }
+
+// GetLoadcoreInternalData() (loadcore export 3) returns the address of loadcore's internal data,
+// loaded with lui/addiu, which holds the list of loaded modules at +16. Returns its IOP address, or 0
+static uint32_t iopLoadcoreInternals(void) {
+  static uint32_t internals = 0;
+  if (internals)
+    return internals;
+  uint32_t loadcore = iopFindExportTable("loadcore"); // One of the first tables in IOP RAM
+  if (!loadcore)
+    return 0;
+  uint32_t func = iopRead(loadcore + 20 + 3 * 4);
+  uint32_t hi = 0;
+  for (int i = 0; i < 6; i++) {
+    uint32_t insn = iopReadCode(func + i * 4);
+    if (((insn >> 26) == 0x0f) && (((insn >> 16) & 0x1f) == 2)) // lui v0, hi
+      hi = insn << 16;
+    else if (((insn >> 26) == 0x09) && (((insn >> 16) & 0x1f) == 2)) // addiu v0, v0, lo
+      return internals = (hi + (int16_t)(insn & 0xffff)) & 0x1fffff;
+  }
+  return 0;
+}
+
+// Returns the IOP address of the registered library name (up to 8 characters) from loadcore's list
+// (internals +0, linked through the first word), or 0 if it's not loaded.
+// Much faster than looking for its export table in the whole IOP RAM
+static uint32_t iopFindLibrary(const char *name) {
+  uint32_t nameWords[2] = {0, 0};
+  memcpy(nameWords, name, (strlen(name) < 8) ? strlen(name) : 8);
+  uint32_t internals = iopLoadcoreInternals();
+  uint32_t library = internals ? (iopReadCode(internals) & 0x1fffff) : 0;
+  for (int n = 0; library && (library < LIVESCAN_IOP_RAM_SIZE) && (n < 128); n++) {
+    if ((iopReadCode(library + 12) == nameWords[0]) && (iopReadCode(library + 16) == nameWords[1]))
+      return library;
+    library = iopReadCode(library) & 0x1fffff;
+  }
+  return 0;
+}
+
 // Returns the version of the IOP library name, or -1 if it's not loaded
 static int iopLibraryVersion(const char *name) {
-  uint32_t table = iopFindExportTable(name);
-  return table ? (int)(iopRead(table + 8) & 0xffff) : -1;
+  uint32_t library = iopFindLibrary(name);
+  return library ? (int)(iopReadCode(library + 8) & 0xffff) : -1;
 }
+
+// Finds the IOP module name (up to 16 characters) in loadcore's module list (internals +16)
+// and returns the IOP address of its text, with the size of its text, data and bss in size, or 0
+static uint32_t iopFindModule(const char *name, uint32_t *size) {
+  int nameLen = strlen(name);
+  uint32_t internals = iopLoadcoreInternals();
+  uint32_t module = internals ? (iopReadCode(internals + 16) & 0x1fffff) : 0;
+  for (int n = 0; module && (module < LIVESCAN_IOP_RAM_SIZE) && (n < 64); n++) {
+    char moduleName[20] = {0};
+    uint32_t namePtr = iopReadCode(module + 4) & 0x1fffff;
+    for (int i = 0; namePtr && (i < 20); i += 4) {
+      uint32_t word = iopReadCode(namePtr + i);
+      memcpy(&moduleName[i], &word, 4);
+    }
+    if (!memcmp(moduleName, name, nameLen + 1)) {
+      *size = iopReadCode(module + 28) + iopReadCode(module + 32) + iopReadCode(module + 36);
+      return iopReadCode(module + 24) & 0x1fffff;
+    }
+    module = iopReadCode(module) & 0x1fffff;
+  }
+  return 0;
+}
+
+// Returns the EE address of gamescan.irx's LiveScanShared, looking for it only in gamescan.irx's memory
+static uint32_t locateLiveScan(void) {
+  uint32_t size = 0;
+  uint32_t start = iopFindModule("gamescan", &size);
+  if (!start || (size > 0x40000))
+    return 0;
+  return findLiveScan(LIVESCAN_IOP_RAM + start, LIVESCAN_IOP_RAM + start + size);
+}
+
+// EE cycle counter (COP0 Count, 294.912 MHz), to time the module loads for the log
+static uint32_t eeCycles(void) {
+  uint32_t count;
+  asm volatile("mfc0 %0, $9" : "=r"(count));
+  return count;
+}
+#define EE_CYCLES_PER_MS 294912
+static uint32_t liveScanLoadMs[2]; // Time OSDSYS was blocked loading iomanX and gamescan.irx
 
 // Loads live scan module i (0: iomanX, 1: gamescan) from the memory card
 // with OSDSYS's sceSifLoadModule(). Returns its result
@@ -430,7 +506,9 @@ static int loadLiveScanModule(int i) {
 static int loadLiveScanModules(void) {
   liveScanModulesLoaded = 1;
   for (int i = 0; i < 2; i++) {
+    uint32_t start = eeCycles();
     int ret = loadLiveScanModule(i);
+    liveScanLoadMs[i] = (eeCycles() - start) / EE_CYCLES_PER_MS;
     if (ret < 0)
       return -((i + 1) * 1000 - ret);
   }
@@ -454,8 +532,6 @@ static const char *iopDiagLibNames[] = {"thsemap", "thevent", "thbase", "intrman
 #define IOP_DIAG_LIBS (sizeof(iopDiagLibNames) / sizeof(iopDiagLibNames[0]))
 static uint32_t iopDiagLibTables[IOP_DIAG_LIBS];
 
-// Reads a word of IOP code at the IOP address addr
-static uint32_t iopReadCode(uint32_t addr) { return iopRead(LIVESCAN_IOP_RAM + (addr & 0x1ffffc)); }
 
 // games_live_scan = 2 log: the boot report (livescan_diag.c) followed by the IOP state,
 // in the report buffer of livescan_diag.c, since the patcher's own memory is limited
@@ -503,24 +579,6 @@ static int logExportTable(uint32_t addr, void *userdata) {
   logPrintf("  %-8s v%04lx @%05lx exports %3d [%08lx %08lx]\n", name, iopRead(addr + 8) & 0xffff, addr - LIVESCAN_IOP_RAM, count, iopRead(addr),
             iopRead(addr + 4));
   return 0; // Keep going
-}
-
-// GetLoadcoreInternalData() (loadcore export 3) returns the address of loadcore's internal data,
-// loaded with lui/addiu, which holds the list of loaded modules at +16. Returns its IOP address, or 0
-static uint32_t iopLoadcoreInternals(void) {
-  uint32_t loadcore = iopFindExportTable("loadcore");
-  if (!loadcore)
-    return 0;
-  uint32_t func = iopRead(loadcore + 20 + 3 * 4);
-  uint32_t hi = 0;
-  for (int i = 0; i < 6; i++) {
-    uint32_t insn = iopReadCode(func + i * 4);
-    if (((insn >> 26) == 0x0f) && (((insn >> 16) & 0x1f) == 2)) // lui v0, hi
-      hi = insn << 16;
-    else if (((insn >> 26) == 0x09) && (((insn >> 16) & 0x1f) == 2)) // addiu v0, v0, lo
-      return (hi + (int16_t)(insn & 0xffff)) & 0x1fffff;
-  }
-  return 0;
 }
 
 // Copies the name of the IOP module whose code has the IOP address addr into name (17 bytes)
@@ -722,7 +780,8 @@ static void startLiveScanLog(GamesSubmenu *menu) {
 #ifdef LIVESCAN
   liveScanReportClear();
 #endif
-  logPrintf("OSDMenu live scan threads\nROMVER %s\n", settings.romver);
+  logPrintf("OSDMenu live scan threads\nROMVER %s\nModule loads: iomanX %lu ms, gamescan %lu ms\n", settings.romver, liveScanLoadMs[0],
+            liveScanLoadMs[1]);
   logLiveScanThreads();
   liveScanLogWritten = 1;
   sendLiveScanLog(menu, "Refresh list", 0);
@@ -865,7 +924,7 @@ static int startLiveScan(GamesSubmenu *menu) {
   liveScanLogPending = (settings.gamesLiveScan == 2) && !liveScanLogWritten;
 
   if (!liveScanAddr)
-    liveScanAddr = findLiveScan();
+    liveScanAddr = locateLiveScan();
   if (liveScanAddr) {
     requestLiveScan(menu, liveScanLogPending ? LIVESCAN_LIST : LIVESCAN_SCAN);
     return 1;
@@ -923,7 +982,7 @@ static void pollLiveScan(void) {
 
   if (liveScanWaitFrames) {
     // gamescan.irx writes its structure once its thread starts
-    if (!(liveScanFrames++ % 15) && (liveScanAddr = findLiveScan())) {
+    if (!(liveScanFrames++ % 15) && (liveScanAddr = locateLiveScan())) {
       liveScanWaitFrames = 0;
       requestLiveScan(liveScanMenu, liveScanLogPending ? LIVESCAN_LIST : LIVESCAN_SCAN);
       return;
