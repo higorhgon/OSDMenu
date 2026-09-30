@@ -167,6 +167,8 @@ These options are also read by the **launcher**:
   remote drivers wait for their turn, loads `mmceman` the first time (read into IOP RAM before, since the memory card
   can't be read while the lock is held), scans, hands the SIO2 back and then writes the list.
   The IOP kernel doesn't implement `SuspendThread()`, so the drivers' threads can't be paused instead.
+  The embedded `mmceman` is built without the `sio2man` hook that turns transfers to memory card slot 2 into no-ops,
+  so OSDSYS still sees the memory card in slot 2 after a scan.
   **The controller doesn't respond while scanning.** If the scan takes more than 20 seconds, the lock is released anyway.
   Errors are shown in the "Refresh list" label, and the next "Refresh list" falls back to the launcher.
   With `games_live_scan = 2`, the first "Refresh list" writes a diagnostics log instead of scanning, without taking the
