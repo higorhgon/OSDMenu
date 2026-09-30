@@ -324,8 +324,10 @@ static int isIopFunctionAddress(uint32_t value) {
   return (value & 0xfff00000) == 0xbfc00000;
 }
 
-// Returns 1 if the IOP RAM at addr (EE address) holds an export table: magic 0x41e00000,
-// a printable name at +12 and function addresses from +20 (export 4 at +36 is always a function)
+// Returns 1 if the IOP RAM at addr (EE address) holds an export table: magic 0x41e00000, a printable
+// name at +12 and, from +20, function addresses or NULL, with at least one function among exports 4-7.
+// Import tables have the same header, but hold instruction pairs: "jr ra; addiu zero, zero, <index>"
+// before they're linked and "j <function>; nop" after
 static int isExportTable(volatile uint32_t *w) {
   if (w[0] != 0x41e00000)
     return 0;
@@ -336,7 +338,18 @@ static int isExportTable(volatile uint32_t *w) {
     if ((c < 0x20) || (c > 0x7e))
       return 0;
   }
-  return isIopFunctionAddress(w[5]) && isIopFunctionAddress(w[9]);
+
+  int functions = 0;
+  for (int i = 0; i < 8; i++) {
+    uint32_t value = w[5 + i];
+    if (!value)
+      continue;
+    if (!isIopFunctionAddress(value))
+      return 0; // An instruction: import table
+    if (i >= 4)
+      functions++;
+  }
+  return functions > 0;
 }
 
 // Calls found(address, userdata) for every export table in IOP RAM until it returns non-zero,
@@ -518,6 +531,30 @@ static int showIopDiagnostics(GamesSubmenu *menu) {
   // Every export table in IOP RAM: the registered libraries
   logPrintf("\nExport tables:\n");
   iopForEachExportTable(logExportTable, NULL);
+
+  // Raw headers of the first tables with the export/import magic, classified as E(xport) or I(mport)
+  logPrintf("\nTables with magic 41e00000 (first 40):\n");
+  int tables = 0;
+  for (uint32_t addr = LIVESCAN_IOP_RAM; (addr < LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - 64) && (tables < 40); addr += 4) {
+    if (iopRead(addr) != 0x41e00000)
+      continue;
+    uint32_t words[2] = {iopRead(addr + 12), iopRead(addr + 16)};
+    char name[9] = {0};
+    memcpy(name, words, 8);
+    for (int i = 0; name[i]; i++)
+      if ((name[i] < 0x20) || (name[i] > 0x7e))
+        name[i] = '?';
+    DI();
+    ee_kmode_enter();
+    int isExport = isExportTable((volatile uint32_t *)addr);
+    ee_kmode_exit();
+    EI();
+    logPrintf("  %c @%05lx %-8s v%04lx:", isExport ? 'E' : 'I', addr - LIVESCAN_IOP_RAM, name, iopRead(addr + 8) & 0xffff);
+    for (int e = 0; e < 8; e++)
+      logPrintf(" %08lx", iopRead(addr + 20 + e * 4));
+    logPrintf("\n");
+    tables++;
+  }
 
   // sio2man's transfer lock (23, 24), transfer (25) and unlock (26) exports and their code
   if (sio2) {
