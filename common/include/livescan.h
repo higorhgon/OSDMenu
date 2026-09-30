@@ -3,12 +3,19 @@
 
 // Experimental live games scan (games_live_scan).
 //
-// The patcher loads iomanX, mmceman and gamescan.irx before starting OSDSYS.
-// OSDSYS owns the SIF RPC stack once it's running, so the patcher can't make
-// RPC calls from its menu hooks. Instead, it talks to gamescan.irx through
-// this structure in IOP RAM, which the EE can access directly at
+// OSDSYS resets the IOP when it starts, so modules loaded by the patcher are lost.
+// Instead, the patcher writes iomanX, mmceman and gamescan.irx to the memory card
+// (LIVESCAN_IRX_*) before starting OSDSYS, and loads them from there when the scan
+// is first requested, through OSDSYS's own sceSifLoadModule().
+// OSDSYS owns the SIF RPC stack once it's running, so the patcher talks to
+// gamescan.irx through this structure in IOP RAM, which the EE can access directly at
 // LIVESCAN_IOP_RAM (uncached). The structure is located by its magic words,
 // which gamescan.irx only writes at runtime so the module image never contains them.
+
+// Module files on the memory card OSDMENU.CNF was loaded from ('?' is replaced with the slot)
+#define LIVESCAN_IRX_IOMANX "mc?:/SYS-CONF/LSIOMANX.IRX"
+#define LIVESCAN_IRX_MMCEMAN "mc?:/SYS-CONF/LSMMCE.IRX"
+#define LIVESCAN_IRX_GAMESCAN "mc?:/SYS-CONF/LSGSCAN.IRX"
 
 #define LIVESCAN_MAGIC0 0x4d44534f // "OSDM"
 #define LIVESCAN_MAGIC1 0x4556494c // "LIVE"

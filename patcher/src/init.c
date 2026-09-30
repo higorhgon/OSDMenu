@@ -1,3 +1,6 @@
+#include "init.h"
+#include "settings.h"
+#include <errno.h>
 #include <fcntl.h>
 #include <iopcontrol.h>
 #include <iopheap.h>
@@ -5,6 +8,7 @@
 #include <loadfile.h>
 #include <sbv_patches.h>
 #include <sifrpc.h>
+#include <string.h>
 #define NEWLIB_PORT_AWARE
 #include <fileio.h>
 
@@ -56,6 +60,7 @@ int initModules() {
 }
 
 #ifdef LIVESCAN
+#include "livescan.h"
 extern unsigned char iomanX_irx[] __attribute__((aligned(16)));
 extern uint32_t size_iomanX_irx;
 extern unsigned char mmceman_irx[] __attribute__((aligned(16)));
@@ -63,27 +68,52 @@ extern uint32_t size_mmceman_irx;
 extern unsigned char gamescan_irx[] __attribute__((aligned(16)));
 extern uint32_t size_gamescan_irx;
 
-// Loads the modules used by the experimental live games scan (games_live_scan).
-// Must be called before OSDSYS starts, while the patcher still owns SIF RPC
+// Writes data to path, unless the file already has the same contents,
+// so the memory card is only written when the modules change
+static int writeFileIfChanged(const char *path, const uint8_t *data, uint32_t size) {
+  static uint8_t buf[2048] __attribute__((aligned(64)));
+  int fd = fioOpen(path, FIO_O_RDONLY);
+  if (fd >= 0) {
+    int same = (fioLseek(fd, 0, FIO_SEEK_END) == (int)size);
+    fioLseek(fd, 0, FIO_SEEK_SET);
+    for (uint32_t offset = 0; same && (offset < size); offset += sizeof(buf)) {
+      uint32_t len = ((size - offset) > sizeof(buf)) ? sizeof(buf) : (size - offset);
+      same = (fioRead(fd, buf, len) == (int)len) && !memcmp(buf, data + offset, len);
+    }
+    fioClose(fd);
+    if (same)
+      return 0;
+  }
+
+  if ((fd = fioOpen(path, FIO_O_WRONLY | FIO_O_CREAT | FIO_O_TRUNC)) < 0)
+    return fd;
+  int ret = fioWrite(fd, (void *)data, size);
+  fioClose(fd);
+  return (ret == (int)size) ? 0 : -EIO;
+}
+
+// Writes the modules used by the experimental live games scan (games_live_scan) to the memory card
+// OSDMENU.CNF was loaded from, so they can be loaded after OSDSYS resets the IOP (see livescan.h).
 // Returns 0 on success, or -(module number * 1000 + error) where module number is
-// 1 for iomanX, 2 for mmceman and 3 for gamescan, and error is 999 if the module refused to stay resident
-int loadLiveScanModules() {
+// 1 for iomanX, 2 for mmceman and 3 for gamescan
+int writeLiveScanModules() {
   struct {
+    const char *path;
     void *irx;
     uint32_t size;
   } modules[] = {
-      {iomanX_irx, size_iomanX_irx},
-      {mmceman_irx, size_mmceman_irx},
-      {gamescan_irx, size_gamescan_irx},
+      {LIVESCAN_IRX_IOMANX, iomanX_irx, size_iomanX_irx},
+      {LIVESCAN_IRX_MMCEMAN, mmceman_irx, size_mmceman_irx},
+      {LIVESCAN_IRX_GAMESCAN, gamescan_irx, size_gamescan_irx},
   };
 
   for (int i = 0; i < 3; i++) {
-    int iopret = 0;
-    int ret = SifExecModuleBuffer(modules[i].irx, modules[i].size, 0, NULL, &iopret);
+    char path[32];
+    strcpy(path, modules[i].path);
+    path[2] = (settings.mcSlot == 1) ? '1' : '0';
+    int ret = writeFileIfChanged(path, modules[i].irx, modules[i].size);
     if (ret < 0)
       return -((i + 1) * 1000 - ret);
-    if (iopret == 1)
-      return -((i + 1) * 1000 + 999);
   }
   return 0;
 }

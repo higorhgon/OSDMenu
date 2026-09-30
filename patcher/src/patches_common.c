@@ -178,9 +178,8 @@ void patchExecuteOSDSYS(void *epc, void *gp, int argc, char *argv[]) {
 
 #ifdef LIVESCAN
   if (settings.gamesLiveScan && settings.gamesUseMMCE) {
-    settings.liveScanBoot = loadLiveScanModules();
-    if (!settings.liveScanBoot && !liveScanProbe())
-      settings.liveScanBoot = LIVESCAN_BOOT_NOT_FOUND;
+    settings.liveScanBoot = writeLiveScanModules();
+    findLiveScanLoader((uint8_t *)epc);
     if (settings.gamesLiveScan == 2)
       writeLiveScanDiagnostics((uint8_t *)epc);
   }

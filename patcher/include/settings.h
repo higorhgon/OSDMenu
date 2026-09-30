@@ -44,9 +44,8 @@ typedef enum {
   OSD_BOOT_BROWSER,
 } OSDBoot;
 
-// settings.liveScanBoot values besides the loadLiveScanModules() result
-#define LIVESCAN_BOOT_NOT_LOADED 1 // Modules were not loaded
-#define LIVESCAN_BOOT_NOT_FOUND 2  // Modules were loaded, but gamescan.irx wasn't found in IOP RAM
+// settings.liveScanBoot value besides the writeLiveScanModules() result
+#define LIVESCAN_BOOT_NOT_LOADED 1 // Modules were not written
 
 // Games submenus, shown by the automatic "Games >" and "PSX >" entries
 #define SUBMENU_GAMES 0 // PS2 games (GAMES_MENU_IDX, GAMES_CACHE_PATH)
@@ -114,7 +113,8 @@ typedef struct {
   int menuSlotsUsed; // menuItemName slots used by the regular entries and the group items
   // Experimental live scan (games_live_scan), see livescan.h
   int gamesLiveScan;
-  int liveScanBoot; // loadLiveScanModules() result, or LIVESCAN_BOOT_* (for diagnostics)
+  int liveScanBoot;        // writeLiveScanModules() result, or LIVESCAN_BOOT_NOT_LOADED (for diagnostics)
+  uint32_t liveScanLoader; // OSDSYS's sceSifLoadModule(), 0 if not found
   int gamesUseMMCE;
   char gamesCdFolder[32];
   char gamesDvdFolder[32];

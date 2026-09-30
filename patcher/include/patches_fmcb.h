@@ -7,8 +7,8 @@
 void patchMenu(uint8_t *osd);
 
 #if !defined(HOSD) && defined(GAMES_MENU)
-// Returns 1 if the live games scan module is in IOP RAM
-int liveScanProbe(void);
+// Finds OSDSYS's sceSifLoadModule() for the live scan
+void findLiveScanLoader(uint8_t *osd);
 #endif
 
 // Patches menu drawing functions

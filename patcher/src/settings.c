@@ -676,6 +676,7 @@ void initConfig(void) {
   settings.menuSlotsUsed = 0;
   settings.gamesLiveScan = 0;
   settings.liveScanBoot = LIVESCAN_BOOT_NOT_LOADED;
+  settings.liveScanLoader = 0;
   settings.gamesUseMMCE = 0;
   strcpy(settings.gamesCdFolder, "CD");
   strcpy(settings.gamesDvdFolder, "DVD");

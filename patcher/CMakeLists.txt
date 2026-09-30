@@ -143,7 +143,7 @@ add_custom_command(
 list(APPEND ELF_SOURCES ${launcher_source})
 
 # Experimental live games scan (games_live_scan): iomanX, mmceman and gamescan.irx
-# are loaded by the patcher before OSDSYS starts
+# are written to the memory card by the patcher and loaded by OSDSYS when the scan starts
 set(PATCHER_LIVESCAN OFF)
 if(NOT PATCHER_HOSD AND LAUNCHER_GAMES_MENU AND LAUNCHER_MMCE)
   set(PATCHER_LIVESCAN ON)

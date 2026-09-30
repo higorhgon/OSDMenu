@@ -206,15 +206,23 @@ static void setGamesLabels(GamesSubmenu *menu, const char *refreshLabel) {
 #ifdef GAMES_MENU
 //
 // Experimental live scan (games_live_scan), see livescan.h.
-// gamescan.irx is loaded before OSDSYS starts and is controlled by writing
-// directly into its LiveScanShared structure in IOP RAM, since the patcher
-// can't use SIF RPC while OSDSYS is running.
+// OSDSYS resets the IOP when it starts, so iomanX, mmceman and gamescan.irx are loaded
+// from the memory card with OSDSYS's own sceSifLoadModule() when the scan is first requested.
+// gamescan.irx is then controlled by writing directly into its LiveScanShared structure
+// in IOP RAM, since the patcher can't use SIF RPC while OSDSYS is running.
 //
 #define LIVESCAN_TIMEOUT_FRAMES (60 * 60) // ~60 seconds
 #define LIVESCAN_HEARTBEAT_FRAMES 90      // ~1.5 seconds
 
 static uint32_t liveScanAddr = 0; // LiveScanShared address in the EE's view of IOP RAM
 static int liveScanDisabled = 0;  // Set after a failure, "Refresh list" then uses the launcher
+static int liveScanLoadFrames = 0; // > 0 while "Loading modules..." is shown, before the modules are loaded
+static int liveScanWaitFrames = 0; // > 0 while waiting for gamescan.irx to start after loading it
+static int liveScanLoadResult = 0; // loadLiveScanModules() result
+static int liveScanModulesLoaded = 0; // Modules are only loaded once
+static int liveScanDiagShown = 0;     // games_live_scan = 2 shows the diagnostics before the first scan
+#define LIVESCAN_LOAD_DELAY_FRAMES 3 // Let "Loading modules..." be drawn before OSDSYS blocks on the loads
+#define LIVESCAN_START_FRAMES 180    // ~3 seconds for gamescan.irx to write its structure
 static int liveScanFrames = 0;
 static uint32_t liveScanHeartbeat = 0;
 #define liveScanMenu (&settings.submenus[SUBMENU_GAMES]) // Only PS2 games are scanned live
@@ -287,47 +295,101 @@ static uint32_t findLiveScan(void) {
   return found;
 }
 
-// Ends the live scan with an error shown in the "Refresh list" label.
-// The next "Refresh list" falls back to scanning with the launcher
-static void failLiveScan(const char *label) {
+// Shows label in "Refresh list" and the games again, keeping the cursor on "Refresh list"
+static void showLiveScanLabel(const char *label) {
   liveScanActive = 0;
-  liveScanDisabled = 1;
+  liveScanLoadFrames = liveScanWaitFrames = 0;
   setGamesLabels(liveScanMenu, label);
   sortGames(liveScanMenu);
   showGamesEntries(liveScanMenu);
-  menuInfo->currentEntry = 2 + liveScanMenu->count + 1; // Keep the cursor on "Refresh list"
+  menuInfo->currentEntry = 2 + liveScanMenu->count + 1;
 }
 
-// Returns 1 if gamescan.irx is in IOP RAM. Used right after loading it, before OSDSYS starts
-int liveScanProbe(void) { return findLiveScan() != 0; }
+// Ends the live scan with an error shown in the "Refresh list" label.
+// The next "Refresh list" falls back to scanning with the launcher
+static void failLiveScan(const char *label) {
+  showLiveScanLabel(label);
+  liveScanDisabled = 1;
+}
 
-// Starts a live scan of the menu and shows "Scanning..." until it's done.
-// Returns 0 if the live scan is not enabled for it, so the launcher scans instead
-static int startLiveScan(GamesSubmenu *menu) {
-  if ((menu != liveScanMenu) || !settings.gamesLiveScan || liveScanDisabled || !settings.gamesUseMMCE)
-    return 0;
+// Returns the version of the IOP library name (up to 8 characters) or -1 if it's not loaded,
+// by looking for its export table (magic 0x41e00000, version at +8, name at +12) in IOP RAM
+static int iopLibraryVersion(const char *name) {
+  uint32_t nameWords[2] = {0, 0};
+  memcpy(nameWords, name, (strlen(name) < 8) ? strlen(name) : 8);
 
-  if (!menu->cacheLoaded) {
-    menu->count = 0;
-    setGamesLabels(menu, "Refresh list");
+  const uint32_t chunk = 0x10000; // Interrupts are re-enabled between chunks
+  int version = -1;
+  for (uint32_t start = LIVESCAN_IOP_RAM; (version < 0) && (start < LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - 32); start += chunk) {
+    uint32_t end = start + chunk;
+    if (end > LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - 32)
+      end = LIVESCAN_IOP_RAM + LIVESCAN_IOP_RAM_SIZE - 32;
+
+    DI();
+    ee_kmode_enter();
+    for (uint32_t addr = start; addr < end; addr += 4) {
+      volatile uint32_t *w = (volatile uint32_t *)addr;
+      if ((w[0] == 0x41e00000) && (w[3] == nameWords[0]) && (w[4] == nameWords[1])) {
+        version = w[2] & 0xffff;
+        break;
+      }
+    }
+    ee_kmode_exit();
+    EI();
   }
+  return version;
+}
 
-  if (!liveScanAddr)
-    liveScanAddr = findLiveScan();
-  if (!liveScanAddr) {
-    char label[NAME_LEN];
-    if (settings.liveScanBoot == LIVESCAN_BOOT_NOT_LOADED)
-      strcpy(label, "Refresh list (live scan: modules not loaded)");
-    else if (settings.liveScanBoot == LIVESCAN_BOOT_NOT_FOUND)
-      strcpy(label, "Refresh list (live scan: loaded but not found)");
-    else if (settings.liveScanBoot < 0)
-      snprintf(label, sizeof(label), "Refresh list (live scan: load error %d)", settings.liveScanBoot);
-    else // Found before OSDSYS started, so OSDSYS must have reset the IOP
-      strcpy(label, "Refresh list (live scan: lost after OSD start)");
-    failLiveScan(label);
-    return 1;
+// Loads the live scan modules from the memory card with OSDSYS's sceSifLoadModule().
+// Returns 0 on success, or -(module number * 1000 + error) where module number is
+// 1 for iomanX, 2 for mmceman and 3 for gamescan
+static int loadLiveScanModules(void) {
+  int (*sceSifLoadModule)(const char *path, int argLength, const char *args) = (void *)settings.liveScanLoader;
+  static const char *paths[] = {LIVESCAN_IRX_IOMANX, LIVESCAN_IRX_MMCEMAN, LIVESCAN_IRX_GAMESCAN};
+
+  liveScanModulesLoaded = 1;
+  for (int i = 0; i < 3; i++) {
+    if ((i == 0) && (iopLibraryVersion("iomanx") >= 0))
+      continue; // Already there
+
+    char path[32];
+    strcpy(path, paths[i]);
+    path[2] = (settings.mcSlot == 1) ? '1' : '0';
+    int ret = sceSifLoadModule(path, 0, NULL);
+    if (ret < 0)
+      return -((i + 1) * 1000 - ret);
   }
+  return 0;
+}
 
+// OSDSYS's sceSifLoadModule(path, argLength, args) and sceSifLoadModuleEncrypted() are consecutive
+// stubs calling the same function with the LOADFILE modes 0 (module) and 4 (encrypted module)
+static uint32_t patternLoadModule[] = {
+    0x27bdfff0, // addiu sp, sp, -16
+    0xffbf0000, // sd    ra, 0(sp)
+    0x0c000000, // jal   load
+    0x0000382d, // move  a3, zero
+    0xdfbf0000, // ld    ra, 0(sp)
+    0x03e00008, // jr    ra
+    0x27bd0010, // addiu sp, sp, 16
+    0x00000000, // nop
+    0x27bdfff0, // addiu sp, sp, -16
+    0xffbf0000, // sd    ra, 0(sp)
+    0x0c000000, // jal   load
+    0x24070004, // li    a3, 4
+};
+static uint32_t patternLoadModule_mask[] = {0xffffffff, 0xffffffff, 0xfc000000, 0xffffffff, 0xffffffff, 0xffffffff,
+                                            0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xfc000000, 0xffffffff};
+
+void findLiveScanLoader(uint8_t *osd) {
+  uint32_t *ptr = (uint32_t *)findPatternWithMask(osd, 0x100000, (uint8_t *)patternLoadModule, (uint8_t *)patternLoadModule_mask,
+                                                  sizeof(patternLoadModule));
+  if (ptr && (ptr[2] == ptr[10]))
+    settings.liveScanLoader = (uint32_t)ptr;
+}
+
+// Sends the scan request to gamescan.irx and shows "Scanning..." until it's done
+static void requestLiveScan(GamesSubmenu *menu) {
   iopWrite(LIVESCAN_FIELD(devices), LIVESCAN_DEV_MMCE);
   iopWriteString(LIVESCAN_FIELD(cdFolder), settings.gamesCdFolder, LIVESCAN_FOLDER_LEN);
   iopWriteString(LIVESCAN_FIELD(dvdFolder), settings.gamesDvdFolder, LIVESCAN_FOLDER_LEN);
@@ -348,11 +410,93 @@ static int startLiveScan(GamesSubmenu *menu) {
   setMenuEntry(0, slot);
   menuInfo->entryCount = 3;
   menuInfo->currentEntry = 2;
+}
+
+// Starts a live scan of the menu and shows "Scanning..." until it's done.
+// Returns 0 if the live scan is not enabled for it, so the launcher scans instead
+static int startLiveScan(GamesSubmenu *menu) {
+  if ((menu != liveScanMenu) || !settings.gamesLiveScan || liveScanDisabled || !settings.gamesUseMMCE)
+    return 0;
+
+  if (!menu->cacheLoaded) {
+    menu->count = 0;
+    setGamesLabels(menu, "Refresh list");
+  }
+
+  if (!liveScanAddr)
+    liveScanAddr = findLiveScan();
+  if (liveScanAddr) {
+    requestLiveScan(menu);
+    return 1;
+  }
+
+  char label[NAME_LEN];
+  if (settings.liveScanBoot) {
+    if (settings.liveScanBoot == LIVESCAN_BOOT_NOT_LOADED)
+      strcpy(label, "Refresh list (live scan: modules not written)");
+    else
+      snprintf(label, sizeof(label), "Refresh list (live scan: module write error %d)", settings.liveScanBoot);
+    failLiveScan(label);
+    return 1;
+  }
+  if (!settings.liveScanLoader) {
+    failLiveScan("Refresh list (live scan: OSDSYS module loader not found)");
+    return 1;
+  }
+  if (liveScanModulesLoaded) {
+    failLiveScan("Refresh list (live scan: module not found)");
+    return 1;
+  }
+
+  // games_live_scan = 2: show what OSDSYS loaded first. mmceman only supports sio2man 1.2 and 2.7
+  if ((settings.gamesLiveScan == 2) && !liveScanDiagShown) {
+    liveScanDiagShown = 1;
+    snprintf(label, sizeof(label), "Refresh list (sio2man %x, iomanx %x, loader %08lx)", iopLibraryVersion("sio2man"), iopLibraryVersion("iomanx"),
+             settings.liveScanLoader);
+    showLiveScanLabel(label);
+    return 1;
+  }
+
+  // Show "Loading modules..." and load them a few frames later, since OSDSYS stops drawing while they load
+  int slot = menu->base + menu->count + 1;
+  strcpy(settings.menuItemName[slot], "Loading modules...");
+  setMenuEntry(0, slot);
+  menuInfo->entryCount = 3;
+  menuInfo->currentEntry = 2;
+  liveScanActive = 1;
+  liveScanLoadFrames = LIVESCAN_LOAD_DELAY_FRAMES;
   return 1;
 }
 
 // Called once per frame while the live scan is running
 static void pollLiveScan(void) {
+  if (liveScanLoadFrames) {
+    if (--liveScanLoadFrames)
+      return;
+    liveScanLoadResult = loadLiveScanModules();
+    if (liveScanLoadResult < 0) {
+      char label[NAME_LEN];
+      snprintf(label, sizeof(label), "Refresh list (live scan: load error %d)", liveScanLoadResult);
+      failLiveScan(label);
+      return;
+    }
+    liveScanWaitFrames = LIVESCAN_START_FRAMES;
+    liveScanFrames = 0;
+    return;
+  }
+
+  if (liveScanWaitFrames) {
+    // gamescan.irx writes its structure once its thread starts
+    if (!(liveScanFrames++ % 15) && (liveScanAddr = findLiveScan())) {
+      liveScanWaitFrames = 0;
+      requestLiveScan(liveScanMenu);
+      return;
+    }
+    if (!--liveScanWaitFrames)
+      failLiveScan("Refresh list (live scan: loaded, but not started)");
+    return;
+  }
+
   liveScanFrames++;
   if ((liveScanFrames == LIVESCAN_HEARTBEAT_FRAMES) && (iopRead(LIVESCAN_FIELD(heartbeat)) == liveScanHeartbeat)) {
     failLiveScan("Refresh list (live scan: module not responding)");

@@ -156,7 +156,15 @@ These options are also read by the **launcher**:
 - `games_mmce_gameid` — if enabled (default), sends the game's title ID to MMCE devices before launching, so they switch to the game's own memory card (`mmce?:/MemoryCards/PS2/<ID>/<ID>-1.mcd`), like NHDDL does
 - `games_launcher` — `neutrino` (default) or `opl`. With `opl`, games are launched via `games_opl_path` when OPL can autolaunch them, falling back to Neutrino otherwise (see [launcher/README.md](../launcher/README.md#games-handler))
 - `games_opl_path` — path to OPL, e.g. [RiptOPL](https://github.com/NathanNeurotic/Open-PS2-Loader) (required for `games_launcher = opl`)
-- `games_live_scan` — **experimental**, MMCE only. If enabled, "Refresh list" scans without leaving OSDMenu: the patcher loads `iomanX`, `mmceman` and its own `gamescan.irx` into the IOP before OSDSYS starts and controls `gamescan.irx` through shared IOP memory while OSDSYS is running, showing "Scanning..." until the list is ready. Errors are shown in the "Refresh list" label, and the next "Refresh list" falls back to the launcher. May break OSDSYS memory card or controller access
+- `games_live_scan` — **experimental**, MMCE only. If enabled, "Refresh list" scans without leaving OSDMenu.
+  OSDSYS resets the IOP when it starts, so the patcher writes `iomanX`, `mmceman` and its own `gamescan.irx` to
+  `mc?:/SYS-CONF/` (`LSIOMANX.IRX`, `LSMMCE.IRX`, `LSGSCAN.IRX`, only when they change) and, on the first "Refresh list",
+  loads them with OSDSYS's own `sceSifLoadModule()` ("Loading modules..."). It then controls `gamescan.irx` through
+  shared IOP memory, showing "Scanning..." until the list is ready. Errors are shown in the "Refresh list" label, and the
+  next "Refresh list" falls back to the launcher. `mmceman` only works with the `sio2man` versions 1.2 and 2.7.
+  With `games_live_scan = 2`, the first "Refresh list" only shows the loaded `sio2man` and `iomanx` versions and the
+  address of OSDSYS's module loader, and `mc?:/SYS-CONF/OSDMLIVE.LOG` is written on boot. May break OSDSYS memory card
+  or controller access
 - `games_return_path` — ELF to run after "Refresh list" or a failed game launch (e.g. `mc?:/BOOT/BOOT.ELF`). When not set, the launcher reopens OSDMenu (with the games submenu open) from the path it was started from, then tries `mc?:/BOOT/osdmenu.elf`, and only falls back to the original OSDSYS if both fail
 - `psx_device_usb`, `psx_device_mx4sio`, `psx_device_mmce` — enable scanning each device type for PS1 games (default: all disabled)
 

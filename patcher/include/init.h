@@ -16,8 +16,8 @@ int initModules();
 void resetModules();
 
 #ifdef LIVESCAN
-// Loads the modules used by the experimental live games scan
-int loadLiveScanModules();
+// Writes the modules used by the experimental live games scan to the memory card
+int writeLiveScanModules();
 
 // Writes mc?:/SYS-CONF/OSDMLIVE.LOG with the OSDSYS module loading code (games_live_scan = 2)
 void writeLiveScanDiagnostics(uint8_t *osd);
