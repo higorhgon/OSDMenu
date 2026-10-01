@@ -23,6 +23,10 @@ void deinitOSDSYS();
 void launchProtokernelOSDSYS();
 #endif
 
+// Writes the addresses of OSDSYS's DrawIcon, DrawNonSelectableItem and DrawMenuItem functions
+// found by the menu patches to funcs (0 when not found), for the games_live_scan = 2 boot report
+void getOSDDrawFunctions(uint32_t funcs[3]);
+
 // Searches for byte pattern in memory
 uint8_t *findPatternWithMask(uint8_t *buf, uint32_t bufsize, uint8_t *bytes, uint8_t *mask, uint32_t len);
 
