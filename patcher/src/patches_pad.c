@@ -63,13 +63,46 @@ static uint32_t jumpTarget(uint32_t *insn) {
   return (((uint32_t)insn + 4) & 0xf0000000) | ((*insn & 0x03ffffff) << 2);
 }
 
-// Finds scePadRead() among the libpad functions that follow scePadPortOpen():
-// libpad links them in the same order (seen in HDD-OSD 1.10: PortOpen, PortClose, PortClose2, GetDmaStr,
-// GetFrameCount, Read, GetState...). scePadGetDmaStr() is the function they call the most, and scePadRead()
-// is the first function that calls it after using its third argument (a2, the data buffer).
+// Whether the instruction reads or writes the general purpose register r (approximately: enough for libpad's code)
+static int readsReg(uint32_t insn, int r) {
+  int op = insn >> 26, rs = (insn >> 21) & 0x1f, rt = (insn >> 16) & 0x1f;
+  switch (op) {
+  case 0x02: // j
+  case 0x03: // jal
+  case 0x0f: // lui
+    return 0;
+  case 0x00: // SPECIAL
+  case 0x1c: // MMI
+  case 0x04: // beq
+  case 0x05: // bne
+  case 0x14: // beql
+  case 0x15: // bnel
+    return (rs == r) || (rt == r);
+  }
+  if (((op >= 0x28) && (op <= 0x2f)) || (op == 0x1f) || (op == 0x3f)) // Stores (sq, sd)
+    return (rs == r) || (rt == r);
+  return rs == r; // Loads, immediates, REGIMM
+}
+
+static int writesReg(uint32_t insn, int r) {
+  int op = insn >> 26, rt = (insn >> 16) & 0x1f, rd = (insn >> 11) & 0x1f;
+  if ((op == 0x00) || (op == 0x1c))
+    return rd == r;
+  if (((op >= 0x08) && (op <= 0x0f)) || (op == 0x18) || (op == 0x19) || (op == 0x1a) || (op == 0x1b) || (op == 0x1e) ||
+      ((op >= 0x20) && (op <= 0x27)) || (op == 0x37)) // Immediates, daddi(u), ldl/ldr, lq, loads, ld
+    return rt == r;
+  return 0;
+}
+
+// Finds scePadRead() among the libpad functions that follow scePadPortOpen() (seen in HDD-OSD 1.10 and
+// ROM 2.30: PortOpen, PortClose, PortClose2, GetDmaStr, GetFrameCount, Read, GetState...).
+// scePadGetDmaStr() is the function they call the most. scePadRead() is the first function OSDSYS calls in
+// the range that calls scePadGetDmaStr() and uses its third argument (a2, the data buffer): reads a2
+// before writing it. scePadGetFrameCount() uses a2 too, but to keep its first argument.
 // Returns 0 if not found
 #define LIBPAD_SEARCH_SIZE 0x800
-static uint32_t findPadRead(uint32_t portOpen) {
+#define LIBPAD_FUNC_MAX_INSNS 96
+static uint32_t findPadRead(uint8_t *osd, uint32_t portOpen) {
   uint32_t *start = (uint32_t *)(portOpen + 4);
   uint32_t *end = (uint32_t *)(portOpen + LIBPAD_SEARCH_SIZE);
 
@@ -93,29 +126,30 @@ static uint32_t findPadRead(uint32_t portOpen) {
     return 0;
   padDmaStrAddr = dmaStr;
 
-  // Functions start with "addiu sp, sp, -N"
-  for (uint32_t *p = start; p < end; p++) {
-    if (((*p & 0xffff8000) != 0x27bd8000) || ((uint32_t)p <= dmaStr))
+  // The lowest function after scePadGetDmaStr() that OSDSYS calls and that matches
+  uint32_t found = 0;
+  for (uint32_t *p = (uint32_t *)osd; p < (uint32_t *)(osd + 0x100000); p++) {
+    uint32_t target = jumpTarget(p);
+    if ((target <= dmaStr) || (target >= (uint32_t)end) || (target & 3) || (found && (target >= found)))
       continue;
-    // Looks for a register instruction using a2 up to the call to scePadGetDmaStr() and its delay slot
-    int usesA2 = 0;
-    for (int i = 1; (i < 12) && (p + i + 1 < end); i++) {
-      uint32_t insn = p[i];
-      if ((insn >> 26) == 0x02)
-        break; // j: not this function
-      if (((insn >> 26) == 0) && ((((insn >> 21) & 0x1f) == 6) || (((insn >> 16) & 0x1f) == 6)))
-        usesA2 = 1;
-      if (jumpTarget(&p[i]) == dmaStr) {
-        uint32_t delay = p[i + 1];
-        if (((delay >> 26) == 0) && ((((delay >> 21) & 0x1f) == 6) || (((delay >> 16) & 0x1f) == 6)))
-          usesA2 = 1;
-        if (usesA2)
-          return (uint32_t)p;
+
+    uint32_t *code = (uint32_t *)target;
+    int a2Read = 0, a2Written = 0, callsDmaStr = 0;
+    for (int i = 0; (i < LIBPAD_FUNC_MAX_INSNS) && (&code[i] < end); i++) {
+      uint32_t insn = code[i];
+      if (!a2Written && readsReg(insn, 6))
+        a2Read = 1;
+      if (writesReg(insn, 6))
+        a2Written = 1;
+      if (jumpTarget(&code[i]) == dmaStr)
+        callsDmaStr = 1;
+      if ((insn == 0x03e00008) || ((insn >> 26) == 0x02)) // jr ra or j: end of the function
         break;
-      }
     }
+    if (a2Read && callsDmaStr)
+      found = target;
   }
-  return 0;
+  return found;
 }
 
 static int hookPadPortOpen(int port, int slot, void *addr) {
@@ -158,7 +192,7 @@ void patchPadPortOpen(uint8_t *osd) {
   padPortOpenAddr = (uint32_t)func;
   redirectCalls(osd, (uint32_t)func, hookPadPortOpen);
 
-  if ((padReadAddr = findPadRead((uint32_t)func))) {
+  if ((padReadAddr = findPadRead(osd, (uint32_t)func))) {
     scePadRead = (void *)padReadAddr;
     padReadRedirects = redirectCalls(osd, padReadAddr, hookPadRead);
   }
