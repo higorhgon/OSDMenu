@@ -3,6 +3,7 @@
 // so the report now has the libpad code that follows scePadPortOpen(), to check how the patcher
 // finds scePadRead() (used to hide Triangle from OSDSYS in the submenus) without the OSDSYS binary.
 #include "settings.h"
+#include "patches_common.h"
 #include "patches_pad.h"
 #include <kernel.h>
 #include <stdarg.h>
@@ -30,6 +31,68 @@ static void out(const char *fmt, ...) {
   va_start(args, fmt);
   liveScanReportAppendV(fmt, args);
   va_end(args);
+}
+
+// OSDSYS drawing functions (covers investigation): the code of DrawIcon, DrawNonSelectableItem and DrawMenuItem
+// and of the functions they call, two levels deep, to find how OSDSYS draws textures and measures text
+#define DIAG_DRAW_ROOTS 3
+#define DIAG_DRAW_MAX_FUNCS 14
+#define DIAG_DRAW_ROOT_SIZE 0x300  // Bytes dumped at most for the three functions
+#define DIAG_DRAW_CALLEE_SIZE 0x180 // and for the functions they call
+
+static uint32_t drawFuncs[DIAG_DRAW_MAX_FUNCS];
+static int drawFuncDepth[DIAG_DRAW_MAX_FUNCS];
+static int drawFuncCount;
+
+static void addDrawFunc(uint32_t func, int depth) {
+  for (int i = 0; i < drawFuncCount; i++)
+    if (drawFuncs[i] == func)
+      return;
+  if (drawFuncCount < DIAG_DRAW_MAX_FUNCS) {
+    drawFuncs[drawFuncCount] = func;
+    drawFuncDepth[drawFuncCount++] = depth;
+  }
+}
+
+static void logDrawFunctions(uint8_t *osd) {
+  static const char *rootNames[DIAG_DRAW_ROOTS] = {"DrawIcon", "DrawNonSelectableItem", "DrawMenuItem"};
+  uint32_t roots[DIAG_DRAW_ROOTS];
+  getOSDDrawFunctions(roots);
+  out("\nDrawing functions: DrawIcon %08x, DrawNonSelectableItem %08x, DrawMenuItem %08x\n", roots[0], roots[1], roots[2]);
+
+  drawFuncCount = 0;
+  for (int i = 0; i < DIAG_DRAW_ROOTS; i++)
+    if (roots[i])
+      addDrawFunc(roots[i], 0);
+
+  // Breadth first, so the functions called directly come before the ones they call
+  for (int f = 0; f < drawFuncCount; f++) {
+    uint32_t *code = (uint32_t *)drawFuncs[f];
+    if (((uint32_t)code < (uint32_t)osd) || ((uint32_t)code >= (uint32_t)osd + DIAG_SCAN_SIZE - DIAG_DRAW_ROOT_SIZE) || ((uint32_t)code & 3))
+      continue;
+
+    // Up to the first "jr ra" and its delay slot
+    int max = ((drawFuncDepth[f] == 0) ? DIAG_DRAW_ROOT_SIZE : DIAG_DRAW_CALLEE_SIZE) / 4;
+    int words = max;
+    for (int w = 0; w < max - 1; w++) {
+      if (code[w] == 0x03e00008) { // jr ra
+        words = w + 2;
+        break;
+      }
+    }
+
+    const char *name = "";
+    for (int r = 0; r < DIAG_DRAW_ROOTS; r++)
+      if (roots[r] == (uint32_t)code)
+        name = rootNames[r];
+    out("\n%08x %s (depth %d, %d words):", (uint32_t)code, name, drawFuncDepth[f], words);
+    for (int w = 0; w < words; w++) {
+      out("%s%08x", (w % 8) ? " " : "\n  ", code[w]);
+      if ((drawFuncDepth[f] < 2) && ((code[w] >> 26) == 0x03)) // jal
+        addDrawFunc(((uint32_t)&code[w] & 0xf0000000) | ((code[w] & 0x03ffffff) << 2), drawFuncDepth[f] + 1);
+    }
+    out("\n");
+  }
 }
 
 // Returns the report written on boot, followed by what was appended with liveScanReportAppendV(),
@@ -89,7 +152,8 @@ void writeLiveScanDiagnostics(uint8_t *osd) {
     out("\n");
   }
 
-write:;
+write:
+  logDrawFunctions(osd);
   char path[] = "mc0:/SYS-CONF/OSDMLIVE.LOG";
   if (settings.mcSlot == 1)
     path[2] = '1';

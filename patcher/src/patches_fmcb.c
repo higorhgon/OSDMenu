@@ -1598,6 +1598,12 @@ void patchMenuDraw(uint8_t *osd) {
 
 static void (*DrawNonSelectableItem)(int X, int Y, uint32_t *color, int alpha, const char *string);
 static void (*DrawIcon)(int type, int X, int Y, int alpha);
+
+void getOSDDrawFunctions(uint32_t funcs[3]) {
+  funcs[0] = (uint32_t)DrawIcon;
+  funcs[1] = (uint32_t)DrawNonSelectableItem;
+  funcs[2] = (uint32_t)DrawMenuItem;
+}
 static void (*DrawButtonPanelGetOSDLang)(void);
 
 int ButtonsPanel_Type = 0;
