@@ -1290,6 +1290,10 @@ static void pollCovers(int reopened) {
   char coverName[LIVESCAN_COVER_NAME_LEN];
   snprintf(coverName, sizeof(coverName), "%s%s", name, settings.gamesCoverIco ? COVER_RAW_ICO_SUFFIX : COVER_RAW_COV_SUFFIX);
   iopWriteString(LIVESCAN_FIELD(coverName), coverName, LIVESCAN_COVER_NAME_LEN);
+  // gamescan.irx loads mmceman from the memory card the first time, if the list wasn't scanned live
+  char mmcePath[] = LIVESCAN_IRX_MMCEMAN;
+  mmcePath[2] = (settings.mcSlot == 1) ? '1' : '0';
+  iopWriteString(LIVESCAN_FIELD(mmcePath), mmcePath, LIVESCAN_PATH_LEN);
   iopWrite(LIVESCAN_FIELD(coverSeq), ++coverSeq);
   iopWrite(LIVESCAN_FIELD(request), LIVESCAN_COVER);
   coverRequested = selected;
