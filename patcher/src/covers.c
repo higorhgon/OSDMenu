@@ -200,11 +200,10 @@ void coversInitText(uint32_t drawMenuItem) {
 
 const char *coversFitText(const char *string) {
   static char fitted[NAME_LEN];
-  // The menu is centered on menuX, between the panel and the right edge of the screen,
-  // leaving a margin for TVs that crop the edges (overscan)
+  // The menu is centered on menuX, between the panel and the right edge of the screen
   int room = settings.menuX - (COVER_X + COVER_SCREEN_WIDTH + COVER_PANEL_BORDER + 8);
-  if (640 - 32 - settings.menuX < room)
-    room = 640 - 32 - settings.menuX;
+  if (640 - 8 - settings.menuX < room)
+    room = 640 - 8 - settings.menuX;
   room *= 2;
   if (!textWidth || (room <= 0) || (textWidth(string) <= room))
     return string;
