@@ -237,7 +237,7 @@ games_opl_path = mmce0:/APPS/OPL/RIPTOPL.ELF
 games_neutrino_path = mmce0:/APPS/neutrino/neutrino.elf
 ```
 
-**Game covers** (MMCE games): the cover of the selected game is shown to the left of the Games submenu.
+**Game covers** (MMCE games): the cover of the selected game is shown to the left of the Games and PSX submenus.
 The covers are OPL's ART images (`<device>:/ART/<title ID>_COV.jpg` or `.png`, like `SLPM_685.13_COV.png`, or
 `<ISO name>_COV`), converted by "Refresh list" into `ART/OSDHUB/`, so refresh the list after adding covers.
 ```ini

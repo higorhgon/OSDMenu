@@ -28,9 +28,11 @@ static unsigned int gameCount;
 
 static void *mmceBuffer = NULL; // mmceman read from the memory card, until it's loaded
 static void *coverBuffer = NULL; // Last cover read (games_covers)
-// Title IDs of the games in the cache, by cache index, read once for the covers
+// Title IDs and MMCE slots (-1 when not on an MMCE device) of the games in the cache, by cache index,
+// read once per cache for the covers
 static char coverIDs[LIVESCAN_MAX_GAMES][GAME_ID_LEN];
-static int coverIDsLoaded = 0;
+static signed char coverSlots[LIVESCAN_MAX_GAMES];
+static char coverCache[LIVESCAN_PATH_LEN]; // Cache the IDs were read from, empty to read them again
 static int mmceSize = 0;
 
 static iox_dirent_t dirent __attribute__((aligned(64)));
@@ -293,7 +295,9 @@ static void scanEmberFolder(const char *mountpoint) {
     strncpy(shared.names[gameCount], dirent.name, LIVESCAN_NAME_LEN - 1);
     shared.names[gameCount][LIVESCAN_NAME_LEN - 1] = '\0';
     strcpy(gamePaths[gameCount], path);
-    gameIDs[gameCount][0] = '\0';
+    // A title ID in the folder name names the game's cover
+    if (!findGameID(dirent.name, gameIDs[gameCount]))
+      gameIDs[gameCount][0] = '\0';
     gameCount++;
   }
   iomanX_dclose(dfd);
@@ -467,9 +471,9 @@ static int writeCache(void) {
     else {
       outLine("bsd", "mmce");
       outLine("dvd", gamePaths[i]);
-      if (gameIDs[i][0])
-        outLine("id", gameIDs[i]);
     }
+    if (gameIDs[i][0])
+      outLine("id", gameIDs[i]);
     if (shared.played[i]) {
       sprintf(number, "%u", shared.played[i]);
       outLine("played", number);
@@ -783,7 +787,7 @@ static void doScan(void) {
 
   shared.stage = LIVESCAN_STAGE_WRITE;
   res = writeCache();
-  coverIDsLoaded = 0; // The cache order changed
+  coverCache[0] = '\0'; // The cache order changed
 
 out:
   unlockSIO2();
@@ -795,7 +799,8 @@ out:
 
 static void loadCoverIDs(void) {
   memset(coverIDs, 0, sizeof(coverIDs));
-  coverIDsLoaded = 1;
+  memset(coverSlots, 0xff, sizeof(coverSlots));
+  strcpy(coverCache, shared.cachePath);
   char *data = readFile(shared.cachePath);
   if (!data)
     return;
@@ -804,8 +809,12 @@ static void loadCoverIDs(void) {
   while (nextCacheLine(&pos, &key, &value)) {
     if (!strcmp(key, "game"))
       idx++;
-    else if (!strcmp(key, "id") && (idx >= 0) && (idx < LIVESCAN_MAX_GAMES))
+    if ((idx < 0) || (idx >= LIVESCAN_MAX_GAMES))
+      continue;
+    if (!strcmp(key, "id"))
       strncpy(coverIDs[idx], value, GAME_ID_LEN - 1);
+    else if ((!strcmp(key, "dvd") || !strcmp(key, "psx")) && !strncmp(value, "mmce", 4) && ((value[4] == '0') || (value[4] == '1')))
+      coverSlots[idx] = value[4] - '0';
   }
   FreeSysMemory(data);
 }
@@ -815,8 +824,14 @@ static void loadCoverIDs(void) {
 // The IDs come from the cache on the memory card, and mmceman is loaded first if the list wasn't scanned live
 static void readCover(void) {
   int res = 0;
-  if (!coverIDsLoaded)
+  if (strcmp(coverCache, shared.cachePath))
     loadCoverIDs();
+  // Only the game's own device is opened, since an empty MMCE slot takes a while to answer
+  int slot = (shared.coverIndex < LIVESCAN_MAX_GAMES) ? coverSlots[shared.coverIndex] : -1;
+  if (slot < 0) {
+    res = -2; // ENOENT
+    goto out;
+  }
   if ((res = findSIO2Lock()))
     goto out;
   if (!shared.mmceLoaded && (res = readMMCE()))
@@ -833,16 +848,14 @@ static void readCover(void) {
   const char *name = shared.coverName;
   if ((shared.coverIndex < LIVESCAN_MAX_GAMES) && coverIDs[shared.coverIndex][0])
     name = coverIDs[shared.coverIndex];
-  res = -2; // ENOENT
-  for (int slot = 0; slot < 2; slot++) {
-    char path[LIVESCAN_COVER_NAME_LEN + LIVESCAN_COVER_SUFFIX_LEN + 24];
-    sprintf(path, "mmce%d:/" COVER_RAW_DIR "/%s%s", slot, name, shared.coverSuffix);
-    int fd = iomanX_open(path, FIO_O_RDONLY);
-    if (fd < 0)
-      continue;
+  char path[LIVESCAN_COVER_NAME_LEN + LIVESCAN_COVER_SUFFIX_LEN + 24];
+  sprintf(path, "mmce%d:/" COVER_RAW_DIR "/%s%s", slot, name, shared.coverSuffix);
+  int fd = iomanX_open(path, FIO_O_RDONLY);
+  if (fd < 0)
+    res = fd;
+  else {
     res = iomanX_read(fd, coverBuffer, COVER_RAW_MAX_SIZE);
     iomanX_close(fd);
-    break;
   }
 
 out:

@@ -405,7 +405,9 @@ static int scanEmberFolder(const char *mountpoint, int *emberFound, int *entries
     snprintf(g->path, GAMES_REL_PATH_LEN, "%s", path);
     g->neutrinoDriver = NULL;
     g->media = GameMedia_CD;
-    g->id[0] = '\0';
+    // A title ID in the folder name names the game's cover
+    if (!findGameID(dirent.name, g->id))
+      g->id[0] = '\0';
   }
   fileXioDclose(dfd);
   return 1;
@@ -1060,7 +1062,8 @@ static int writeGamesCache(GamesConfig *cfg, int sortRecent) {
 
   for (int i = 0; (i < gameCount) && !res; i++) {
     if (cfg->kind == GamesKind_PSX)
-      len = snprintf(line, sizeof(line), "game = %s\npsx = %s\n", gameList[i].name, gameList[i].path);
+      len = snprintf(line, sizeof(line), "game = %s\npsx = %s\n%s%s%s", gameList[i].name, gameList[i].path, gameList[i].id[0] ? "id = " : "",
+                     gameList[i].id, gameList[i].id[0] ? "\n" : "");
     else
       len = snprintf(line, sizeof(line), "game = %s\nbsd = %s\ndvd = %s\n%s%s%s", gameList[i].name, gameList[i].neutrinoDriver, gameList[i].path,
                      gameList[i].id[0] ? "id = " : "", gameList[i].id, gameList[i].id[0] ? "\n" : "");
@@ -1472,17 +1475,26 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
   scanDevices(cfg, localMask);
 
   // The covers are converted while the local drivers are loaded
-  if ((modeType == 's') && cfg->covers && (cfg->kind == GamesKind_PS2) && gameCount) {
+  if ((modeType == 's') && cfg->covers && gameCount) {
     CoverGame *covers = malloc(gameCount * sizeof(CoverGame));
-    if (covers) {
+    char (*artNames)[GAMES_NAME_LEN] = malloc(gameCount * GAMES_NAME_LEN);
+    if (covers && artNames) {
       for (int i = 0; i < gameCount; i++) {
         covers[i].name = gameList[i].name;
         covers[i].path = gameList[i].path;
         covers[i].id = gameList[i].id;
+        // The ISO name without the extension, or the PS1 game folder (RiptOPL's art name for Ember games)
+        const char *slash = strrchr(gameList[i].path, '/');
+        snprintf(artNames[i], GAMES_NAME_LEN, "%s", slash ? slash + 1 : gameList[i].path);
+        char *ext = strrchr(artNames[i], '.');
+        if (ext && (cfg->kind == GamesKind_PS2))
+          *ext = '\0';
+        covers[i].artName = artNames[i];
       }
       convertGameCovers(covers, gameCount, cfg->coverIco);
-      free(covers);
     }
+    free(covers);
+    free(artNames);
   }
 
 #ifdef SMB

@@ -1,7 +1,8 @@
 #ifndef _COVERS_RAW_H_
 #define _COVERS_RAW_H_
 
-// Game covers (games_covers): the launcher converts OPL's ART images when the list is refreshed into
+// Game covers (games_covers): the launcher converts OPL's ART images (RiptOPL's for PS1 games run by Ember)
+// when the list is refreshed into
 // <device>:/ART/OSDHUB/<title ID><COVER_RAW_*_SUFFIX> (or <game name><COVER_RAW_*_SUFFIX> for games without an ID),
 // which gamescan.irx reads for the patcher.
 //
@@ -13,10 +14,11 @@
 #define COVER_RAW_COV_SUFFIX "_COV.RAW" // From <name>_COV.jpg/png: the case cover
 #define COVER_RAW_ICO_SUFFIX "_ICO.RAW" // From <name>_ICO.jpg/png: the disc
 
-// Converted sizes: covers keep the 0.71 aspect ratio of OPL's covers, discs are square
+// Converted sizes: covers keep the 0.71 aspect ratio of OPL's covers, and discs are as big as
+// OSD-XMB's selected game icon (72x72 on a 640x480 screen), drawn without scaling
 #define COVER_RAW_WIDTH 128
 #define COVER_RAW_COV_HEIGHT 180
-#define COVER_RAW_ICO_HEIGHT 128
+#define COVER_RAW_ICO_SIZE 72
 #define COVER_RAW_MAX_SIZE (COVER_RAW_HEADER_SIZE + COVER_RAW_WIDTH * COVER_RAW_COV_HEIGHT * 2)
 
 // Header words: magic, width | height << 16, size of the source image (to convert it again when it changes), reserved

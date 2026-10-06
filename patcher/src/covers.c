@@ -112,11 +112,10 @@ void coversInit(uint32_t drawIcon) {
 
 // Screen position: COVER_SCREEN_WIDTH wide, with the height that keeps the aspect ratio on a 4:3 TV
 // (an OSDSYS line is two TV lines, and 640 pixels are about 7/15 as wide as 224 lines are tall),
-// centered vertically on the menu in a panel as tall as a case cover
+// centered vertically on the menu
 #define COVER_X 40
 #define COVER_SCREEN_WIDTH 120
 #define COVER_SCREEN_HEIGHT(width, height) (COVER_SCREEN_WIDTH * (height) * 7 / ((width) * 15))
-#define COVER_PANEL_HEIGHT COVER_SCREEN_HEIGHT(COVER_RAW_WIDTH, COVER_RAW_COV_HEIGHT)
 #define COVER_PANEL_BORDER 6
 
 static int coverWidth = 0; // Size of the cover in the texture, 0 when there's none
@@ -172,19 +171,23 @@ void coversDraw(int alpha) {
   if (!coversReady || !coverVisible)
     return;
 
-  // Dark panel behind the cover, only shown with a cover
-  int panelY = settings.menuY - COVER_PANEL_HEIGHT / 2;
-  OSDSprite panel = {0x10, 0x10, 0x18, alpha * 3 / 4};
-  setRect(&panel, COVER_X - COVER_PANEL_BORDER, panelY - COVER_PANEL_BORDER / 2, COVER_X + COVER_SCREEN_WIDTH + COVER_PANEL_BORDER,
-          panelY + COVER_PANEL_HEIGHT + COVER_PANEL_BORDER / 2);
-  panel.abe = 1;
-  spriteSubmit(&panel);
+  // Square images are discs, drawn unscaled without the panel like OSD-XMB's game icons,
+  // and covers are drawn COVER_SCREEN_WIDTH wide in a dark panel
+  int disc = (coverWidth == coverHeight);
+  int width = disc ? coverWidth : COVER_SCREEN_WIDTH;
+  int height = COVER_SCREEN_HEIGHT(coverWidth, coverHeight) * width / COVER_SCREEN_WIDTH;
+  int x = COVER_X + (COVER_SCREEN_WIDTH - width) / 2;
+  int y = settings.menuY - height / 2;
+  if (!disc) {
+    OSDSprite panel = {0x10, 0x10, 0x18, alpha * 3 / 4};
+    setRect(&panel, x - COVER_PANEL_BORDER, y - COVER_PANEL_BORDER / 2, x + width + COVER_PANEL_BORDER, y + height + COVER_PANEL_BORDER / 2);
+    panel.abe = 1;
+    spriteSubmit(&panel);
+  }
 
   // The cover, with texture coordinates offset by half a texel like DrawIcon()
-  int height = COVER_SCREEN_HEIGHT(coverWidth, coverHeight);
-  int y = settings.menuY - height / 2;
   OSDSprite cover = {0x80, 0x80, 0x80, alpha};
-  setRect(&cover, COVER_X, y, COVER_X + COVER_SCREEN_WIDTH, y + height);
+  setRect(&cover, x, y, x + width, y + height);
   cover.u0 = cover.v0 = 8;
   cover.u1 = (coverWidth << 4) + 8;
   cover.v1 = (coverHeight << 4) + 8;

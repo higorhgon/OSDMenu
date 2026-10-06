@@ -1176,6 +1176,8 @@ static int coverSelected = -1;   // Cache index of the selected game
 static int coverRequested = -1;  // Game whose cover was requested
 static int coverDoneGame = -1;   // Game whose cover was read last, or that has none
 static int coverTextureGame = -1; // Game whose cover is in the video memory
+static uint32_t coverMissing[LIVESCAN_MAX_GAMES / 32]; // Games without a cover, not asked for again until the submenu is reopened
+static int coverWidth = COVER_RAW_WIDTH;              // Width of the cover read, for readCoverRow()
 static int coverFrames = 0;
 static int coverPending = 0;     // Waiting for gamescan.irx to read the cover
 static uint32_t coverSeq = 0;
@@ -1193,10 +1195,10 @@ static int coverStatus = COVER_STATUS_NONE;
 static uint32_t coverHeader = 0;
 
 static void readCoverRow(int y, uint16_t *row) {
-  uint32_t addr = coverAddr + COVER_RAW_HEADER_SIZE + y * COVER_RAW_WIDTH * 2;
+  uint32_t addr = coverAddr + COVER_RAW_HEADER_SIZE + y * coverWidth * 2;
   DI();
   ee_kmode_enter();
-  for (int x = 0; x < COVER_RAW_WIDTH; x += 2) {
+  for (int x = 0; x < coverWidth; x += 2) {
     uint32_t word = *(volatile uint32_t *)(addr + x * 2);
     row[x] = word & 0xffff;
     row[x + 1] = word >> 16;
@@ -1217,8 +1219,9 @@ static void showCover(void) {
   int width = dims & 0xffff, height = dims >> 16;
   coverHeader = iopRead(coverAddr);
   coverStatus = COVER_STATUS_INVALID;
-  if ((coverHeader == COVER_RAW_MAGIC) && (width == COVER_RAW_WIDTH) && (height <= COVER_RAW_COV_HEIGHT) &&
+  if ((coverHeader == COVER_RAW_MAGIC) && (width > 0) && (width <= COVER_RAW_WIDTH) && !(width & 1) && (height <= COVER_RAW_COV_HEIGHT) &&
       (size >= COVER_RAW_HEADER_SIZE + width * height * 2)) {
+    coverWidth = width;
     coversSetImage(width, height, readCoverRow);
     coverTextureGame = coverRequested;
     coverStatus = COVER_STATUS_SHOWN;
@@ -1260,6 +1263,7 @@ static void pollCovers(int reopened) {
   if (reopened) {
     coversClear();
     coverDoneGame = coverSelected = coverTextureGame = -1;
+    memset(coverMissing, 0, sizeof(coverMissing));
   }
   // Moving to "< Back" or "Refresh list" and back shows the cover still in the video memory again,
   // and another game's cover is read once the cursor stays on it
@@ -1281,7 +1285,11 @@ static void pollCovers(int reopened) {
     if (iopRead(LIVESCAN_FIELD(coverDone)) == coverSeq) {
       coverPending = 0;
       coverDoneGame = coverRequested;
-      if (coverRequested == coverSelected)
+      if ((int)iopRead(LIVESCAN_FIELD(coverResult)) < 0) {
+        if (coverRequested < LIVESCAN_MAX_GAMES)
+          coverMissing[coverRequested / 32] |= 1u << (coverRequested % 32);
+        coverStatus = COVER_STATUS_NOT_READ;
+      } else if (coverRequested == coverSelected)
         showCover();
     } else if (++coverFrames > COVER_TIMEOUT_FRAMES) {
       coverPending = 0;
@@ -1290,7 +1298,13 @@ static void pollCovers(int reopened) {
     return;
   }
 
-  if ((selected < 0) || (selected == coverDoneGame) || liveScanActive || (++coverFrames < COVER_SELECT_FRAMES) || !coverModuleReady())
+  if ((selected < 0) || (selected == coverDoneGame) || liveScanActive)
+    return;
+  if ((selected < LIVESCAN_MAX_GAMES) && (coverMissing[selected / 32] & (1u << (selected % 32)))) {
+    coverDoneGame = selected;
+    return;
+  }
+  if ((++coverFrames < COVER_SELECT_FRAMES) || !coverModuleReady())
     return;
 
   // The game name without the favorite mark
@@ -1302,6 +1316,8 @@ static void pollCovers(int reopened) {
   iopWrite(LIVESCAN_FIELD(coverIndex), selected);
   // The covers are named after the title IDs, which gamescan.irx reads from the cache
   char cachePath[] = GAMES_CACHE_PATH;
+  if (activeMenu == &settings.submenus[SUBMENU_PSX])
+    strcpy(cachePath, PSX_CACHE_PATH);
   if (settings.mcSlot == 1)
     cachePath[2] = '1';
   iopWriteString(LIVESCAN_FIELD(cachePath), cachePath, LIVESCAN_PATH_LEN);
@@ -1596,7 +1612,7 @@ void drawMenuItemSelected(int X, int Y, uint32_t *color, int alpha, const char *
 #endif
 #ifdef LIVESCAN
   // Long names are shortened so they don't overlap the cover
-  if (settings.gamesCovers && (activeMenu == &settings.submenus[SUBMENU_GAMES]))
+  if (settings.gamesCovers && activeMenu)
     string = coversFitText(string);
 #endif
   int i;
@@ -1653,7 +1669,7 @@ void drawMenuItemUnselected(int X, int Y, uint32_t *color, int alpha, const char
 #endif
 #ifdef LIVESCAN
   // Long names are shortened so they don't overlap the cover
-  if (settings.gamesCovers && (activeMenu == &settings.submenus[SUBMENU_GAMES]))
+  if (settings.gamesCovers && activeMenu)
     string = coversFitText(string);
 #endif
   int i;
@@ -1919,13 +1935,13 @@ void drawIconLeft(int type, int X, int Y, int alpha) {
 #endif
 #ifdef LIVESCAN
     // Game covers, drawn before the icon so DrawIcon() selects its own texture again
-    static int coversShown = 0;
-    if (settings.gamesCovers && showSubmenuPrompts() && (activeMenu == &settings.submenus[SUBMENU_GAMES])) {
-      pollCovers(!coversShown);
+    static GamesSubmenu *coversMenu = NULL;
+    if (settings.gamesCovers && showSubmenuPrompts() && activeMenu) {
+      pollCovers(coversMenu != activeMenu);
       coversDraw(alpha);
-      coversShown = 1;
+      coversMenu = activeMenu;
     } else
-      coversShown = 0;
+      coversMenu = NULL;
 #endif
     DrawIcon(type, settings.enterX, settings.enterY, alpha);
   } else {

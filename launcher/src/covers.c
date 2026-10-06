@@ -126,8 +126,9 @@ static int convertCover(const char *source, const char *dest, int ico) {
     return -2;
 
   msg("scale ");
-  int height = ico ? COVER_RAW_ICO_HEIGHT : COVER_RAW_COV_HEIGHT;
-  int rawSize = COVER_RAW_HEADER_SIZE + COVER_RAW_WIDTH * height * 2;
+  int width = ico ? COVER_RAW_ICO_SIZE : COVER_RAW_WIDTH;
+  int height = ico ? COVER_RAW_ICO_SIZE : COVER_RAW_COV_HEIGHT;
+  int rawSize = COVER_RAW_HEADER_SIZE + width * height * 2;
   uint32_t *raw = malloc(rawSize);
   if (!raw) {
     stbi_image_free(image);
@@ -135,9 +136,9 @@ static int convertCover(const char *source, const char *dest, int ico) {
   }
   memset(raw, 0, COVER_RAW_HEADER_SIZE);
   raw[COVER_RAW_WORD_MAGIC] = COVER_RAW_MAGIC;
-  raw[COVER_RAW_WORD_SIZE] = COVER_RAW_WIDTH | (height << 16);
+  raw[COVER_RAW_WORD_SIZE] = width | (height << 16);
   raw[COVER_RAW_WORD_SOURCE] = size;
-  scaleImage(image, srcWidth, srcHeight, (uint16_t *)&raw[COVER_RAW_HEADER_SIZE / 4], COVER_RAW_WIDTH, height, !ico);
+  scaleImage(image, srcWidth, srcHeight, (uint16_t *)&raw[COVER_RAW_HEADER_SIZE / 4], width, height, !ico);
   stbi_image_free(image);
 
   msg("write ");
@@ -198,12 +199,13 @@ static int listArt(const char *device, const char *suffix, ArtFile **files) {
   return count;
 }
 
-// Finds the ART image of a game: <title ID><suffix>.jpg/png (OPL's naming), then <ISO name><suffix>.jpg/png.
+// Finds the ART image of a game: <title ID><suffix>.jpg/png (OPL's naming), then <artName><suffix>.jpg/png
+// (the ISO name, or the PS1 game folder like RiptOPL).
 // Returns its size, with its path in path, or -1
-static int findSource(const ArtFile *files, int fileCount, const char *device, const char *isoName, const char *id, const char *suffix,
+static int findSource(const ArtFile *files, int fileCount, const char *device, const char *artName, const char *id, const char *suffix,
                       char *path, size_t pathSize) {
   static const char *extensions[] = {".jpg", ".png"};
-  const char *names[] = {id, isoName};
+  const char *names[] = {id, artName};
   for (int n = 0; n < 2; n++) {
     if (!names[n] || !names[n][0])
       continue;
@@ -262,16 +264,8 @@ void convertGameCovers(const CoverGame *games, int count, int ico) {
         }
       }
 
-      // ISO name without the extension
-      char isoName[128];
-      const char *slash = strrchr(games[i].path, '/');
-      snprintf(isoName, sizeof(isoName), "%s", slash ? slash + 1 : games[i].path);
-      char *ext = strrchr(isoName, '.');
-      if (ext)
-        *ext = '\0';
-
       char source[256];
-      int sourceSize = findSource(files, fileCount, device, isoName, games[i].id, suffix, source, sizeof(source));
+      int sourceSize = findSource(files, fileCount, device, games[i].artName, games[i].id, suffix, source, sizeof(source));
       if (sourceSize < 0)
         continue;
       if (!pass) {
