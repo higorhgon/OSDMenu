@@ -1,5 +1,6 @@
 #ifndef _LIVESCAN_H_
 #define _LIVESCAN_H_
+#include "covers_raw.h"
 
 // Experimental live games scan (games_live_scan).
 //
@@ -24,7 +25,7 @@
 #define LIVESCAN_MAGIC0 0x4d44534f // "OSDM"
 #define LIVESCAN_MAGIC1 0x4556494c // "LIVE"
 #define LIVESCAN_MAGIC2 0x4e414353 // "SCAN"
-#define LIVESCAN_MAGIC3 0x36303030 // "0006"
+#define LIVESCAN_MAGIC3 0x37303030 // "0007"
 
 #define LIVESCAN_IOP_RAM 0xbc000000 // IOP RAM as seen from the EE (uncached)
 #define LIVESCAN_IOP_RAM_SIZE 0x200000
@@ -33,6 +34,7 @@
 #define LIVESCAN_NAME_LEN 80 // Same as the patcher's NAME_LEN
 #define LIVESCAN_FOLDER_LEN 32
 #define LIVESCAN_PATH_LEN 32
+#define LIVESCAN_COVER_NAME_LEN 96 // Game name and COVER_RAW_*_SUFFIX
 
 // status
 #define LIVESCAN_STATUS_IDLE 0
@@ -50,6 +52,7 @@
 #define LIVESCAN_SCAN 1     // Scan and write the cache, keeping the sort order, "played" counters and favorites of the games still found
 #define LIVESCAN_LIST 2     // Only list the threads (threads, threadCount), for the diagnostics log
 #define LIVESCAN_SAVE_FAV 3 // Rewrite the favorites of the cache at cachePath from fav (by cache index)
+#define LIVESCAN_COVER 4    // Read mmce0/1:/COVER_RAW_DIR/coverName into the buffer at coverAddr (games_covers)
 
 // stage: what gamescan.irx is doing, shown while scanning
 #define LIVESCAN_STAGE_IDLE 0
@@ -90,7 +93,7 @@ typedef struct {
 typedef struct {
   unsigned int magic[4];
   volatile unsigned int heartbeat; // Incremented by the IOP thread on every poll
-  volatile unsigned int request;   // LIVESCAN_SCAN or LIVESCAN_LIST, set by the EE and cleared by the IOP
+  volatile unsigned int request;   // LIVESCAN_*, set by the EE and cleared by the IOP
   volatile unsigned int status;    // LIVESCAN_STATUS_*
   volatile int result;             // Cache write result: 0 on success, < 0 on error
   unsigned int devices;            // LIVESCAN_DEV_* to scan, set by the EE
@@ -119,6 +122,13 @@ typedef struct {
   unsigned int played[LIVESCAN_MAX_GAMES];  // "played" counter of each game in names, 0 if never played
   unsigned int fav[LIVESCAN_MAX_GAMES / 32]; // Favorites bitmask by index in names, also the input of LIVESCAN_SAVE_FAV
   char names[LIVESCAN_MAX_GAMES][LIVESCAN_NAME_LEN];
+  // Game covers (games_covers): the EE sets coverName and coverSeq with LIVESCAN_COVER, and the IOP sets coverDone
+  // to coverSeq once coverResult (bytes read into coverAddr, up to COVER_RAW_MAX_SIZE, or < 0) is set
+  volatile unsigned int coverSeq;
+  volatile unsigned int coverDone;
+  volatile int coverResult;
+  volatile unsigned int coverAddr;
+  char coverName[LIVESCAN_COVER_NAME_LEN];
 } LiveScanShared;
 
 #endif

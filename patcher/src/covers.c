@@ -1,4 +1,4 @@
-// Game covers (games_covers = 1), prototype: a panel and a test texture to the left of the games submenus.
+// Game covers (games_covers = 1): the cover of the selected game to the left of the Games submenu.
 //
 // OSDSYS draws its button icons with DrawIcon(), which fills a sprite structure (color, position, texture
 // coordinates, alpha blending and texturing flags), selects the icons texture by its ID and submits the sprite.
@@ -14,8 +14,10 @@
 // using a fraction of it, so the cover texture is placed at the end.
 #include "covers.h"
 #include "settings.h"
+#include "covers_raw.h"
 #include <kernel.h>
 #include <stdint.h>
+#include <string.h>
 
 // OSDSYS sprite, as filled by DrawIcon(). Positions and texture coordinates are 12.4 fixed point
 typedef struct {
@@ -100,53 +102,60 @@ void coversInit(uint32_t drawIcon) {
   coversReady = 1;
 }
 
-// Cover texture: 128x256 PSMCT32 at the end of the video memory (in words, 64 words per block), holding
-// a 128x180 picture
+// Cover texture: 128x256 PSMCT32 at the end of the video memory (in words, 64 words per block),
+// holding a cover of up to 128x180 (covers_raw.h)
 #define COVER_TEX_WIDTH_LOG2 7
 #define COVER_TEX_HEIGHT_LOG2 8
 #define COVER_TEX_WIDTH (1 << COVER_TEX_WIDTH_LOG2)
 #define COVER_TEX_HEIGHT (1 << COVER_TEX_HEIGHT_LOG2)
 #define COVER_TEX_ADDR (0x100000 - COVER_TEX_WIDTH * COVER_TEX_HEIGHT)
-#define COVER_WIDTH 128
-#define COVER_HEIGHT 180
 
-// Screen position: the cover is 120x84 (168 TV lines, about the 2:3 of a PS2 case on a 4:3 TV),
-// centered vertically on the menu
+// Screen position: COVER_SCREEN_WIDTH wide, with the height that keeps the aspect ratio on a 4:3 TV
+// (an OSDSYS line is two TV lines, and 640 pixels are about 7/15 as wide as 224 lines are tall),
+// centered vertically on the menu in a panel as tall as a case cover
 #define COVER_X 40
-#define COVER_Y (settings.menuY - COVER_SCREEN_HEIGHT / 2)
 #define COVER_SCREEN_WIDTH 120
-#define COVER_SCREEN_HEIGHT 84
+#define COVER_SCREEN_HEIGHT(width, height) (COVER_SCREEN_WIDTH * (height) * 7 / ((width) * 15))
+#define COVER_PANEL_HEIGHT COVER_SCREEN_HEIGHT(COVER_RAW_WIDTH, COVER_RAW_COV_HEIGHT)
 #define COVER_PANEL_BORDER 6
 
-// The texture is uploaded two lines at a time from a buffer on the stack, since the patcher's memory is full
+static int coverWidth = 0; // Size of the cover in the texture, 0 when there's none
+static int coverHeight = 0;
+
+// The cover is uploaded two lines at a time from a buffer on the stack, since the patcher's memory is full
 #define UPLOAD_ROWS 2
 
-// Test picture: white border, red and green gradients and a blue checkerboard, to check orientation and scaling
-static uint32_t testPixel(int x, int y) {
-  if ((x >= COVER_WIDTH) || (y >= COVER_HEIGHT))
-    return 0;
-  if ((x < 3) || (x >= COVER_WIDTH - 3) || (y < 3) || (y >= COVER_HEIGHT - 3))
-    return 0x80ffffff;
-  uint32_t r = x * 2;
-  uint32_t g = y * 255 / COVER_HEIGHT;
-  uint32_t b = (((x >> 4) ^ (y >> 4)) & 1) ? 0xc0 : 0x30;
-  return 0x80000000 | (b << 16) | (g << 8) | r; // ABGR, alpha 0x80 is opaque
-}
+void coversSetImage(int width, int height, void (*readRow)(int y, uint16_t *row)) {
+  coverWidth = 0;
+  if (!coversReady || (width > COVER_TEX_WIDTH) || (height > COVER_TEX_HEIGHT))
+    return;
 
-static void uploadTexture(void) {
   uint32_t uploadBuffer[COVER_TEX_WIDTH * UPLOAD_ROWS] __attribute__((aligned(64)));
+  uint16_t row[COVER_TEX_WIDTH];
   uint64_t loadImage[12] __attribute__((aligned(64))); // sceGsLoadImage
-  for (int y = 0; y < COVER_TEX_HEIGHT; y += UPLOAD_ROWS) {
-    for (int row = 0; row < UPLOAD_ROWS; row++)
-      for (int x = 0; x < COVER_TEX_WIDTH; x++)
-        uploadBuffer[row * COVER_TEX_WIDTH + x] = testPixel(x, y + row);
-    gsSetDefLoadImage(loadImage, COVER_TEX_ADDR / 64, COVER_TEX_WIDTH / 64, 0 /* PSMCT32 */, 0, y, COVER_TEX_WIDTH, UPLOAD_ROWS);
+  for (int y = 0; y < height; y += UPLOAD_ROWS) {
+    int rows = (height - y < UPLOAD_ROWS) ? (height - y) : UPLOAD_ROWS;
+    for (int r = 0; r < rows; r++) {
+      // PSMCT16 to PSMCT32, where 0x80 is opaque
+      readRow(y + r, row);
+      for (int x = 0; x < width; x++) {
+        uint32_t p = row[x];
+        uint32_t red = (p & 0x1f) << 3, green = ((p >> 5) & 0x1f) << 3, blue = ((p >> 10) & 0x1f) << 3;
+        uploadBuffer[r * width + x] =
+            ((p & 0x8000) ? 0x80000000 : 0) | ((blue | (blue >> 5)) << 16) | ((green | (green >> 5)) << 8) | red | (red >> 5);
+      }
+    }
+    gsSetDefLoadImage(loadImage, COVER_TEX_ADDR / 64, COVER_TEX_WIDTH / 64, 0 /* PSMCT32 */, 0, y, width, rows);
     FlushCache(0);
     gsSyncPath(0, 0);
     gsExecLoadImage(loadImage, uploadBuffer);
     gsSyncPath(0, 0); // The buffer is reused for the next lines
   }
+  coverWidth = width;
+  coverHeight = height;
 }
+
+void coversClear(void) { coverWidth = 0; }
 
 static void setRect(OSDSprite *sprite, int x0, int y0, int x1, int y1) {
   sprite->x0 = x0 << 4;
@@ -155,27 +164,63 @@ static void setRect(OSDSprite *sprite, int x0, int y0, int x1, int y1) {
   sprite->y1 = y1 << 4;
 }
 
-void coversDraw(int changed, int alpha) {
+void coversDraw(int alpha) {
   if (!coversReady)
     return;
-  if (changed)
-    uploadTexture();
 
-  // Dark panel behind the cover
+  // Dark panel behind the cover, also shown when the game has none
+  int panelY = settings.menuY - COVER_PANEL_HEIGHT / 2;
   OSDSprite panel = {0x10, 0x10, 0x18, alpha * 3 / 4};
-  setRect(&panel, COVER_X - COVER_PANEL_BORDER, COVER_Y - COVER_PANEL_BORDER / 2, COVER_X + COVER_SCREEN_WIDTH + COVER_PANEL_BORDER,
-          COVER_Y + COVER_SCREEN_HEIGHT + COVER_PANEL_BORDER / 2);
+  setRect(&panel, COVER_X - COVER_PANEL_BORDER, panelY - COVER_PANEL_BORDER / 2, COVER_X + COVER_SCREEN_WIDTH + COVER_PANEL_BORDER,
+          panelY + COVER_PANEL_HEIGHT + COVER_PANEL_BORDER / 2);
   panel.abe = 1;
   spriteSubmit(&panel);
+  if (!coverWidth)
+    return;
 
   // The cover, with texture coordinates offset by half a texel like DrawIcon()
+  int height = COVER_SCREEN_HEIGHT(coverWidth, coverHeight);
+  int y = settings.menuY - height / 2;
   OSDSprite cover = {0x80, 0x80, 0x80, alpha};
-  setRect(&cover, COVER_X, COVER_Y, COVER_X + COVER_SCREEN_WIDTH, COVER_Y + COVER_SCREEN_HEIGHT);
+  setRect(&cover, COVER_X, y, COVER_X + COVER_SCREEN_WIDTH, y + height);
   cover.u0 = cover.v0 = 8;
-  cover.u1 = (COVER_WIDTH << 4) + 8;
-  cover.v1 = (COVER_HEIGHT << 4) + 8;
+  cover.u1 = (coverWidth << 4) + 8;
+  cover.v1 = (coverHeight << 4) + 8;
   cover.abe = 1;
   cover.tme = 1;
   setTexture(COVER_TEX_ADDR, COVER_TEX_WIDTH_LOG2, COVER_TEX_HEIGHT_LOG2, 0, 1, 0);
   spriteSubmit(&cover);
+}
+
+// Text width function, the first call in DrawMenuItem(), which centers the text with it
+static int (*textWidth)(const char *string) = NULL;
+
+void coversInitText(uint32_t drawMenuItem) {
+  uint32_t func = validCode(drawMenuItem) ? findJump(drawMenuItem, 0x40, OP_JAL) : 0;
+  textWidth = validCode(func) ? (void *)func : NULL;
+}
+
+const char *coversFitText(const char *string) {
+  static char fitted[NAME_LEN];
+  // The menu is centered on menuX, between the panel and the right edge of the screen
+  int room = settings.menuX - (COVER_X + COVER_SCREEN_WIDTH + COVER_PANEL_BORDER + 8);
+  if (640 - 8 - settings.menuX < room)
+    room = 640 - 8 - settings.menuX;
+  room *= 2;
+  if (!textWidth || (room <= 0) || (textWidth(string) <= room))
+    return string;
+
+  int len = strlen(string);
+  if (len > NAME_LEN - 4)
+    len = NAME_LEN - 4;
+  memcpy(fitted, string, len);
+  while (len > 1) {
+    len--;
+    while ((len > 1) && (fitted[len - 1] == ' '))
+      len--;
+    strcpy(&fitted[len], "...");
+    if (textWidth(fitted) <= room)
+      break;
+  }
+  return fitted;
 }

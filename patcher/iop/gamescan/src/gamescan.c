@@ -27,6 +27,7 @@ static char gameIDs[LIVESCAN_MAX_GAMES][GAME_ID_LEN];
 static unsigned int gameCount;
 
 static void *mmceBuffer = NULL; // mmceman read from the memory card, until it's loaded
+static void *coverBuffer = NULL; // Last cover read (games_covers)
 static int mmceSize = 0;
 
 static iox_dirent_t dirent __attribute__((aligned(64)));
@@ -788,6 +789,42 @@ out:
   shared.stage = LIVESCAN_STAGE_IDLE;
 }
 
+// Reads the cover coverName from the first MMCE device that has it into coverBuffer (games_covers).
+// mmceman is loaded first if the list wasn't scanned live
+static void readCover(void) {
+  int res = 0;
+  if ((res = findSIO2Lock()))
+    goto out;
+  if (!shared.mmceLoaded && (res = readMMCE()))
+    goto out;
+  if (!coverBuffer && !(coverBuffer = AllocSysMemory(ALLOC_FIRST, COVER_RAW_MAX_SIZE, NULL))) {
+    res = -12; // ENOMEM
+    goto out;
+  }
+
+  lockSIO2();
+  if (!shared.mmceLoaded && (res = startMMCE()))
+    goto out;
+
+  res = -2; // ENOENT
+  for (int slot = 0; slot < 2; slot++) {
+    char path[LIVESCAN_COVER_NAME_LEN + 24];
+    sprintf(path, "mmce%d:/" COVER_RAW_DIR "/%s", slot, shared.coverName);
+    int fd = iomanX_open(path, FIO_O_RDONLY);
+    if (fd < 0)
+      continue;
+    res = iomanX_read(fd, coverBuffer, COVER_RAW_MAX_SIZE);
+    iomanX_close(fd);
+    break;
+  }
+
+out:
+  unlockSIO2();
+  shared.coverAddr = (unsigned int)coverBuffer;
+  shared.coverResult = res;
+  shared.coverDone = shared.coverSeq;
+}
+
 static unsigned int bcdToInt(unsigned char bcd) { return ((bcd >> 4) * 10 + (bcd & 0xf)) % 100; }
 
 // Writes the log chunk in logBuffer, creating the file named after the console clock with the first one
@@ -837,12 +874,15 @@ static void scanThread(void *arg) {
     }
     unsigned int request = shared.request;
     if (request) {
-      shared.request = 0;
+      // Busy before the request is cleared, so the EE never sees the previous request's status without a request
       shared.status = LIVESCAN_STATUS_BUSY;
+      shared.request = 0;
       if (request == LIVESCAN_LIST)
         listThreads();
       else if (request == LIVESCAN_SAVE_FAV)
         shared.result = saveFavorites();
+      else if (request == LIVESCAN_COVER)
+        readCover();
       else
         doScan();
       shared.status = LIVESCAN_STATUS_DONE;

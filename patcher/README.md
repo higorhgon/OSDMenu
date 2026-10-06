@@ -156,11 +156,18 @@ only the texts are shown. `games_button_debug = 1` shows the icon types in a lin
 `v` (Version), `b` (Back), `s` (Sort) and `seen` (icons seen in other screens such as System Configuration, which shows
 Circle and Square).
 
-`games_covers = 1` (prototype, default `0`) draws a panel with a test picture to the left of the games submenus, centered on
-`OSDSYS_menu_y`, using OSDSYS's own sprite and texture functions (found from the function that draws the button icons).
-Move the menu to the right with `OSDSYS_menu_x` so it doesn't overlap. With `games_button_debug = 1`, a second line shows
-`cov<1 when the functions were found>` and their addresses: sprite submit (`s`), texture selection (`t`), texture upload (`l`)
-and wait (`y`).
+`games_covers = 1` (default `0`, MMCE games only) shows the cover of the selected game in a panel to the left of the
+Games submenu, centered on `OSDSYS_menu_y`; move the menu to the right with `OSDSYS_menu_x` (names that don't fit
+between the panel and the edge of the screen are shortened with "..."). The launcher converts OPL's ART images when the
+list is refreshed (see the launcher's README), and `games_cover_type = ico` shows the disc image instead of the case cover.
+Once the cursor stays on a game for about 0.3 seconds, `gamescan.irx` (loaded from the memory card like for
+`games_live_scan`, which is why both need the modules the patcher writes to `mc?:/SYS-CONF/`) reads its converted cover from
+`mmce0:/ART/OSDHUB` or `mmce1:/ART/OSDHUB` into IOP RAM, pausing the controller for that moment, and it's drawn with
+OSDSYS's own sprite and texture functions, found from the function that draws the button icons, from a texture at the
+end of the video memory. The first cover loads the modules, which pauses OSDSYS briefly.
+With `games_button_debug = 1`, a second line shows `cov<1 when the functions were found>`, `e<module error>`,
+`g<game whose cover was read>`, `r<bytes read, or error>` and the addresses of the sprite submit (`s`), texture
+selection (`t`) and texture upload (`l`) functions.
 
 These options are also read by the **launcher**:
 - `games_device_usb`, `games_device_mx4sio`, `games_device_mmce` — enable scanning each device type (default: all disabled)

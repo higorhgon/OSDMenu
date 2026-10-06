@@ -381,6 +381,10 @@ int loadConfig(void) {
       settings.gamesCovers = atoi(value);
       continue;
     }
+    if (!strcmp(name, "games_cover_type")) {
+      settings.gamesCoverIco = !strcasecmp(value, "ico");
+      continue;
+    }
     if (!strcmp(name, "games_cd_folder")) {
       if (value[0])
         strncpy(settings.gamesCdFolder, value, sizeof(settings.gamesCdFolder) - 1);
@@ -716,6 +720,7 @@ void initConfig(void) {
   settings.reopenSubmenu = 0;
   settings.buttonDebug = 0;
   settings.gamesCovers = 0;
+  settings.gamesCoverIco = 0;
   settings.groupCount = 0;
   settings.groupBackSlot = -1;
   settings.menuSlotsUsed = 0;

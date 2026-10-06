@@ -237,6 +237,17 @@ games_opl_path = mmce0:/APPS/OPL/RIPTOPL.ELF
 games_neutrino_path = mmce0:/APPS/neutrino/neutrino.elf
 ```
 
+**Game covers** (MMCE games): the cover of the selected game is shown to the left of the Games submenu.
+The covers are OPL's ART images (`<device>:/ART/<ISO name>_COV.jpg` or `.png`, or `<title ID>_COV`), converted by
+"Refresh list" into `ART/OSDHUB/`, so refresh the list after adding covers.
+```ini
+games_covers = 1
+# The disc image (_ICO) instead of the case cover (_COV)
+# games_cover_type = ico
+# Moves the menu to the right of the cover
+OSDSYS_menu_x = 400
+```
+
 **PS1 games with Ember:**
 ```ini
 psx_device_mmce = 1

@@ -126,6 +126,13 @@ Before launching, the drivers for the ISO and the ELF are loaded, and the title 
 (`games_mmce_gameid`, enabled by default) so they switch to the game's memory card, like NHDDL does.
 The slot the ELF is loaded from is skipped when the ELF is on a memory card (`mc?:`).
 
+With `games_covers = 1`, "Refresh list" also converts the covers of the games on MMCE devices for the patcher, which
+draws the one of the selected game (see the patcher's README). For each game, `<device>:/ART/<ISO name>_COV.jpg/png`
+is used, or `<device>:/ART/<title ID>_COV.jpg/png` (OPL's naming), and `_ICO` (the disc image) instead of `_COV`
+with `games_cover_type = ico`. Each one is scaled to 128x180 (128x128 for discs), converted to 16-bit color and
+written to `<device>:/ART/OSDHUB/<game name>_COV.RAW` (`_ICO.RAW`), and only converted again when the image changes.
+JPEG and PNG are decoded with [stb_image](https://github.com/nothings/stb) (public domain).
+
 Selecting a game launches `games_neutrino_path` the same way [NHDDL](https://github.com/pcm720/nhddl) does:
 ```
 neutrino.elf -bsd=<usb|mx4sio|mmce> -dvd=<full ISO path, e.g. mmce0:/DVD/game.iso> -qb [games_neutrino_arg ...]

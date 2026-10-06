@@ -2,16 +2,28 @@
 #define _COVERS_H_
 #include <stdint.h>
 
-// Game covers (games_covers = 1, prototype): draws a panel and a test texture to the left of the games submenus
+// Game covers (games_covers = 1): draws the cover of the selected game in a panel to the left of the Games submenu
 // with OSDSYS's own sprite and texture functions, found from DrawIcon()
 
 // Finds the OSDSYS functions used to draw the covers, from the address of DrawIcon()
 void coversInit(uint32_t drawIcon);
 
-// Draws the cover panel; called from the button panel, once per frame while a games submenu is shown.
-// changed is set when the submenu was opened since the last call, so the texture is uploaded again,
-// and alpha is the button panel's (0-0x80, it fades in)
-void coversDraw(int changed, int alpha);
+// Finds the text width function, from the address of DrawMenuItem()
+void coversInitText(uint32_t drawMenuItem);
+
+// Uploads a width x height PSMCT16 cover (covers_raw.h) to the video memory, reading it a row at a time
+// with readRow(), and shows it
+void coversSetImage(int width, int height, void (*readRow)(int y, uint16_t *row));
+
+// Hides the cover, leaving only the panel
+void coversClear(void);
+
+// Draws the panel and the cover; called from the button panel, once per frame while the Games submenu is shown,
+// with the button panel's alpha (0-0x80, it fades in)
+void coversDraw(int alpha);
+
+// Returns string, or a copy shortened with "..." so that it fits between the panel and the right edge of the screen
+const char *coversFitText(const char *string);
 
 // Resolved addresses for games_button_debug: sprite submit, set texture, load image, sync path,
 // and 1 when everything was found

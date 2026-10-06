@@ -79,7 +79,7 @@ endif()
 
 # Games menu support (depends on OSDM for the special 'games' path dispatch)
 if(LAUNCHER_GAMES_MENU)
-  list(APPEND EE_SOURCES src/handler_games.c)
+  list(APPEND EE_SOURCES src/handler_games.c src/covers.c)
   list(APPEND IRX_FILES padman.irx)
   add_compile_definitions(LAUNCHER_GAMES_MENU)
 endif()

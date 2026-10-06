@@ -1163,6 +1163,124 @@ static void pollLiveScan(void) {
   sortGames(menu);
   showGamesEntries(menu);
 }
+
+#ifdef LIVESCAN
+//
+// Game covers (games_covers): once the cursor stays on a game for COVER_SELECT_FRAMES, gamescan.irx
+// (loaded like for the live scan) reads its converted cover from mmce0/1:/ART/OSDHUB into IOP RAM,
+// and it's uploaded from there to the video memory (see covers.c)
+//
+#define COVER_SELECT_FRAMES 18  // ~0.3 seconds
+#define COVER_TIMEOUT_FRAMES 300 // ~5 seconds
+static int coverSelected = -1;   // Cache index of the selected game
+static int coverRequested = -1;  // Game whose cover was requested
+static int coverDoneGame = -1;   // Game whose cover is shown, or that has none
+static int coverFrames = 0;
+static int coverPending = 0;     // Waiting for gamescan.irx to read the cover
+static uint32_t coverSeq = 0;
+static int coverModuleFrames = 0; // > 0 while waiting for gamescan.irx to start
+static int coverError = 0;        // The modules couldn't be loaded, shown by games_button_debug
+static uint32_t coverAddr;        // EE address of the cover read
+
+static void readCoverRow(int y, uint16_t *row) {
+  uint32_t addr = coverAddr + COVER_RAW_HEADER_SIZE + y * COVER_RAW_WIDTH * 2;
+  DI();
+  ee_kmode_enter();
+  for (int x = 0; x < COVER_RAW_WIDTH; x += 2) {
+    uint32_t word = *(volatile uint32_t *)(addr + x * 2);
+    row[x] = word & 0xffff;
+    row[x + 1] = word >> 16;
+  }
+  ee_kmode_exit();
+  EI();
+}
+
+// Shows the cover gamescan.irx read, if it's valid
+static void showCover(void) {
+  int size = (int)iopRead(LIVESCAN_FIELD(coverResult));
+  coverAddr = LIVESCAN_IOP_RAM + (iopRead(LIVESCAN_FIELD(coverAddr)) & 0x1fffff);
+  coversClear();
+  if (size < COVER_RAW_HEADER_SIZE)
+    return;
+  uint32_t dims = iopRead(coverAddr + COVER_RAW_WORD_SIZE * 4);
+  int width = dims & 0xffff, height = dims >> 16;
+  if ((iopRead(coverAddr) == COVER_RAW_MAGIC) && (width == COVER_RAW_WIDTH) && (height <= COVER_RAW_COV_HEIGHT) &&
+      (size >= COVER_RAW_HEADER_SIZE + width * height * 2))
+    coversSetImage(width, height, readCoverRow);
+}
+
+// Returns 1 once gamescan.irx is running, loading it the first time
+static int coverModuleReady(void) {
+  if (liveScanAddr)
+    return 1;
+  if (coverError)
+    return 0;
+  if (coverModuleFrames) {
+    if (!(coverModuleFrames++ % 15) && (liveScanAddr = locateLiveScan()))
+      return 1;
+    if (coverModuleFrames > LIVESCAN_START_FRAMES)
+      coverError = 3;
+    return 0;
+  }
+  if (liveScanModulesLoaded) {
+    coverError = 4;
+    return 0;
+  }
+  if (settings.liveScanBoot || !settings.liveScanLoader) {
+    coverError = settings.liveScanBoot ? 1 : 2;
+    return 0;
+  }
+  if (loadLiveScanModules() < 0) {
+    coverError = 5;
+    return 0;
+  }
+  coverModuleFrames = 1;
+  return 0;
+}
+
+// Called once per frame while the Games submenu is shown. reopened is set when it was opened since the last call,
+// since OSDSYS may have used the video memory in other screens
+static void pollCovers(int reopened) {
+  if (reopened) {
+    coversClear();
+    coverDoneGame = coverSelected = -1;
+  }
+  int selected = selectedGame();
+  if (selected != coverSelected) {
+    coverSelected = selected;
+    coverFrames = 0;
+    if (selected != coverDoneGame)
+      coversClear();
+  }
+
+  if (coverPending) {
+    if (iopRead(LIVESCAN_FIELD(coverDone)) == coverSeq) {
+      coverPending = 0;
+      coverDoneGame = coverRequested;
+      if (coverRequested == coverSelected)
+        showCover();
+    } else if (++coverFrames > COVER_TIMEOUT_FRAMES)
+      coverPending = 0;
+    return;
+  }
+
+  if ((selected < 0) || (selected == coverDoneGame) || liveScanActive || (++coverFrames < COVER_SELECT_FRAMES) || !coverModuleReady())
+    return;
+
+  // The game name without the favorite mark
+  const char *name = settings.menuItemName[activeMenu->base + selected];
+  if (!strncmp(name, FAVORITE_MARK, strlen(FAVORITE_MARK)))
+    name += strlen(FAVORITE_MARK);
+  char coverName[LIVESCAN_COVER_NAME_LEN];
+  snprintf(coverName, sizeof(coverName), "%s%s", name, settings.gamesCoverIco ? COVER_RAW_ICO_SUFFIX : COVER_RAW_COV_SUFFIX);
+  iopWriteString(LIVESCAN_FIELD(coverName), coverName, LIVESCAN_COVER_NAME_LEN);
+  iopWrite(LIVESCAN_FIELD(coverSeq), ++coverSeq);
+  iopWrite(LIVESCAN_FIELD(request), LIVESCAN_COVER);
+  coverRequested = selected;
+  coverPending = 1;
+  coverFrames = 0;
+}
+#endif
 #endif
 
 // Returns the submenu shown by the menu item index, or NULL
@@ -1440,6 +1558,11 @@ void drawMenuItemSelected(int X, int Y, uint32_t *color, int alpha, const char *
   asm volatile("move %0, $s1" : "=r"(num)::); // For HDD-OSD, get menu index from s1 register
   num *= 8;                                   // Multiply by 8 to align with OSDSYS behavior
 #endif
+#ifdef LIVESCAN
+  // Long names are shortened so they don't overlap the cover
+  if (settings.gamesCovers && (activeMenu == &settings.submenus[SUBMENU_GAMES]))
+    string = coversFitText(string);
+#endif
   int i;
 
   for (i = 0; i < 4; i++)
@@ -1491,6 +1614,11 @@ void drawMenuItemUnselected(int X, int Y, uint32_t *color, int alpha, const char
 #ifdef HOSD
   asm volatile("move %0, $s1" : "=r"(num)::); // For HDD-OSD, get menu index from s1 register
   num *= 8;                                   // Multiply by 8 to align with OSDSYS behavior
+#endif
+#ifdef LIVESCAN
+  // Long names are shortened so they don't overlap the cover
+  if (settings.gamesCovers && (activeMenu == &settings.submenus[SUBMENU_GAMES]))
+    string = coversFitText(string);
 #endif
   int i;
 
@@ -1573,6 +1701,10 @@ void patchMenuDraw(uint8_t *osd) {
   tmp <<= 2;
   DrawMenuItem = (void *)tmp;
   DrawMenuItemStringPtr = DrawMenuItem;
+#ifdef LIVESCAN
+  if (settings.gamesCovers)
+    coversInitText((uint32_t)DrawMenuItem);
+#endif
 
   tmp = 0x0c000000;
   tmp |= ((uint32_t)drawMenuItemSelected >> 2);
@@ -1708,12 +1840,14 @@ void drawNonselectableEntryRight(int X, int Y, uint32_t *color, int alpha, const
         for (int i = 0; (i < seenIconCount) && (len < (int)sizeof(debug) - 4); i++)
           len += snprintf(&debug[len], sizeof(debug) - len, "%s%d", i ? "," : "", seenIconTypes[i]);
         DrawNonSelectableItem(settings.enterX, settings.versionY - 18, color, alpha, debug);
+#ifdef LIVESCAN
         if (settings.gamesCovers) {
-          // "cov<1 when ready> s<sprite submit> t<set texture> l<load image> y<sync path>"
-          snprintf(debug, sizeof(debug), "cov%d s%lx t%lx l%lx y%lx", coversReady, coverSpriteAddr, coverTextureAddr, coverLoadImageAddr,
-                   coverSyncPathAddr);
+          // "cov<1 when ready> e<module error> g<game whose cover was read> r<result> s<sprite submit> t<set texture> l<load image>"
+          snprintf(debug, sizeof(debug), "cov%d e%d g%d r%ld s%lx t%lx l%lx", coversReady, coverError, coverDoneGame,
+                   liveScanAddr ? (long)iopRead(LIVESCAN_FIELD(coverResult)) : 0, coverSpriteAddr, coverTextureAddr, coverLoadImageAddr);
           DrawNonSelectableItem(settings.enterX, settings.versionY - 36, color, alpha, debug);
         }
+#endif
       }
       // Short texts, since the four prompts share the space of two
       DrawNonSelectableItem(sortPromptX() + 28, settings.versionY, color, alpha, activeMenu->sortRecent ? "[Recent]" : "[A-Z]");
@@ -1744,13 +1878,16 @@ void drawIconLeft(int type, int X, int Y, int alpha) {
       enterIconType = type;
       deriveSubmenuIcons();
     }
+#endif
+#ifdef LIVESCAN
     // Game covers, drawn before the icon so DrawIcon() selects its own texture again
-    static GamesSubmenu *coversMenu = NULL;
-    if (settings.gamesCovers && showSubmenuPrompts() && activeMenu) {
-      coversDraw(coversMenu != activeMenu, alpha);
-      coversMenu = activeMenu;
+    static int coversShown = 0;
+    if (settings.gamesCovers && showSubmenuPrompts() && (activeMenu == &settings.submenus[SUBMENU_GAMES])) {
+      pollCovers(!coversShown);
+      coversDraw(alpha);
+      coversShown = 1;
     } else
-      coversMenu = NULL;
+      coversShown = 0;
 #endif
     DrawIcon(type, settings.enterX, settings.enterY, alpha);
   } else {
@@ -1842,7 +1979,7 @@ void patchMenuButtonPanel(uint8_t *osd) {
   tmp &= 0x03ffffff;
   tmp <<= 2;
   DrawIcon = (void *)tmp;
-#ifndef HOSD
+#ifdef LIVESCAN
   if (settings.gamesCovers)
     coversInit((uint32_t)DrawIcon);
 #endif

@@ -31,6 +31,8 @@ typedef struct {
   int useOPL;                            // Launch games with oplPath instead of Neutrino when possible
   char *oplPath;                         // Path to OPL (e.g. RiptOPL), used when useOPL is set
   int mmceGameID;                        // Send the game ID to MMCE devices so they switch to the game's memory card
+  int covers;                            // Convert the ART covers of the MMCE games when scanning (games_covers)
+  int coverIco;                          // Use the disc images (_ICO) instead of the case covers (_COV) (games_cover_type = ico)
 } GamesConfig;
 
 // handler_games.c

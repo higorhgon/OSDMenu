@@ -1,4 +1,5 @@
 #include "common.h"
+#include "covers.h"
 #include "defaults.h"
 #include "dprintf.h"
 #include "handler_games.h"
@@ -1469,6 +1470,20 @@ int handleGames(GamesConfig *cfg, const char *osdmArg) {
   gameListTruncated = 0;
   scanDiagCount = 0;
   scanDevices(cfg, localMask);
+
+  // The covers are converted while the local drivers are loaded
+  if ((modeType == 's') && cfg->covers && (cfg->kind == GamesKind_PS2) && gameCount) {
+    CoverGame *covers = malloc(gameCount * sizeof(CoverGame));
+    if (covers) {
+      for (int i = 0; i < gameCount; i++) {
+        covers[i].name = gameList[i].name;
+        covers[i].path = gameList[i].path;
+        covers[i].id = gameList[i].id;
+      }
+      convertGameCovers(covers, gameCount, cfg->coverIco);
+      free(covers);
+    }
+  }
 
 #ifdef SMB
   const char *smbError = NULL;

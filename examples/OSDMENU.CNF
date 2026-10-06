@@ -45,8 +45,11 @@ app_gameid = 0
 # Experimental (MMCE only): 1 makes "Refresh list" scan without leaving OSDMenu, pausing the controller
 # for the duration of the scan; 2 also writes diagnostics logs to mc?:/SYS-CONF/ (see patcher/README.md)
 # games_live_scan = 0
-# Prototype: 1 draws a panel with a test picture to the left of the games submenus (move the menu with OSDSYS_menu_x)
+# MMCE only: 1 shows the cover of the selected game to the left of the Games submenu (move the menu with OSDSYS_menu_x).
+# The covers are OPL's ART/<ISO name or title ID>_COV.jpg/png, converted by "Refresh list" into ART/OSDHUB/
 # games_covers = 0
+# cov (the case cover) or ico (the disc image, ART/..._ICO.jpg/png)
+# games_cover_type = cov
 # --------------------------------------------------
 # PSX menu: enabling any psx_device_* adds a "PSX >" entry for PS1 games run by Ember
 # (<device>:/EMBER/ember.elf, games in <device>:/EMBER/games/<game>/ with a .cue file)

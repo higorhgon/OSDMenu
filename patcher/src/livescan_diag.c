@@ -14,7 +14,7 @@
 
 #define DIAG_SCAN_SIZE 0x100000
 
-static char report[24 * 1024];
+static char report[16 * 1024]; // The end of a long live scan log is cut
 static int reportLen = 0;
 
 void liveScanReportAppendV(const char *fmt, va_list args) {

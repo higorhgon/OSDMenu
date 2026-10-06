@@ -177,7 +177,8 @@ void patchExecuteOSDSYS(void *epc, void *gp, int argc, char *argv[]) {
 #endif
 
 #ifdef LIVESCAN
-  if (settings.gamesLiveScan && settings.gamesUseMMCE) {
+  // The covers are read by gamescan.irx too
+  if ((settings.gamesLiveScan || settings.gamesCovers) && settings.gamesUseMMCE) {
     settings.liveScanBoot = writeLiveScanModules();
     findLiveScanLoader((uint8_t *)epc);
     if (settings.gamesLiveScan == 2)

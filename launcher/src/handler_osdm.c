@@ -261,6 +261,14 @@ int handleOSDM(int argc, char *argv[]) {
         gamesCfg.oplPath = strdup(valuePtr);
       continue;
     }
+    if (!strncmp(lineBuffer, "games_covers", 12)) {
+      gamesCfg.covers = atoi(valuePtr);
+      continue;
+    }
+    if (!strncmp(lineBuffer, "games_cover_type", 16)) {
+      gamesCfg.coverIco = !strcasecmp(valuePtr, "ico");
+      continue;
+    }
     if (!strncmp(lineBuffer, "games_mmce_gameid", 17)) {
       gamesCfg.mmceGameID = atoi(valuePtr);
       continue;
