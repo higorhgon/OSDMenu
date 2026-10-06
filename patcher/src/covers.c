@@ -165,18 +165,16 @@ static void setRect(OSDSprite *sprite, int x0, int y0, int x1, int y1) {
 }
 
 void coversDraw(int alpha) {
-  if (!coversReady)
+  if (!coversReady || !coverWidth)
     return;
 
-  // Dark panel behind the cover, also shown when the game has none
+  // Dark panel behind the cover, only shown with a cover
   int panelY = settings.menuY - COVER_PANEL_HEIGHT / 2;
   OSDSprite panel = {0x10, 0x10, 0x18, alpha * 3 / 4};
   setRect(&panel, COVER_X - COVER_PANEL_BORDER, panelY - COVER_PANEL_BORDER / 2, COVER_X + COVER_SCREEN_WIDTH + COVER_PANEL_BORDER,
           panelY + COVER_PANEL_HEIGHT + COVER_PANEL_BORDER / 2);
   panel.abe = 1;
   spriteSubmit(&panel);
-  if (!coverWidth)
-    return;
 
   // The cover, with texture coordinates offset by half a texel like DrawIcon()
   int height = COVER_SCREEN_HEIGHT(coverWidth, coverHeight);
@@ -202,10 +200,11 @@ void coversInitText(uint32_t drawMenuItem) {
 
 const char *coversFitText(const char *string) {
   static char fitted[NAME_LEN];
-  // The menu is centered on menuX, between the panel and the right edge of the screen
+  // The menu is centered on menuX, between the panel and the right edge of the screen,
+  // leaving a margin for TVs that crop the edges (overscan)
   int room = settings.menuX - (COVER_X + COVER_SCREEN_WIDTH + COVER_PANEL_BORDER + 8);
-  if (640 - 8 - settings.menuX < room)
-    room = 640 - 8 - settings.menuX;
+  if (640 - 32 - settings.menuX < room)
+    room = 640 - 32 - settings.menuX;
   room *= 2;
   if (!textWidth || (room <= 0) || (textWidth(string) <= room))
     return string;

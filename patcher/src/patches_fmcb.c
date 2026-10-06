@@ -1181,6 +1181,15 @@ static uint32_t coverSeq = 0;
 static int coverModuleFrames = 0; // > 0 while waiting for gamescan.irx to start
 static int coverError = 0;        // The modules couldn't be loaded, shown by games_button_debug
 static uint32_t coverAddr;        // EE address of the cover read
+// What happened to the last cover, for games_button_debug
+#define COVER_STATUS_NONE 0
+#define COVER_STATUS_REQUESTED 1 // Waiting for gamescan.irx
+#define COVER_STATUS_TIMEOUT 2   // gamescan.irx didn't answer
+#define COVER_STATUS_NOT_READ 3  // Missing, or couldn't be read (coverResult < 0)
+#define COVER_STATUS_INVALID 4   // Not a converted cover (coverHeader holds its first word)
+#define COVER_STATUS_SHOWN 5
+static int coverStatus = COVER_STATUS_NONE;
+static uint32_t coverHeader = 0;
 
 static void readCoverRow(int y, uint16_t *row) {
   uint32_t addr = coverAddr + COVER_RAW_HEADER_SIZE + y * COVER_RAW_WIDTH * 2;
@@ -1200,13 +1209,18 @@ static void showCover(void) {
   int size = (int)iopRead(LIVESCAN_FIELD(coverResult));
   coverAddr = LIVESCAN_IOP_RAM + (iopRead(LIVESCAN_FIELD(coverAddr)) & 0x1fffff);
   coversClear();
+  coverStatus = COVER_STATUS_NOT_READ;
   if (size < COVER_RAW_HEADER_SIZE)
     return;
   uint32_t dims = iopRead(coverAddr + COVER_RAW_WORD_SIZE * 4);
   int width = dims & 0xffff, height = dims >> 16;
-  if ((iopRead(coverAddr) == COVER_RAW_MAGIC) && (width == COVER_RAW_WIDTH) && (height <= COVER_RAW_COV_HEIGHT) &&
-      (size >= COVER_RAW_HEADER_SIZE + width * height * 2))
+  coverHeader = iopRead(coverAddr);
+  coverStatus = COVER_STATUS_INVALID;
+  if ((coverHeader == COVER_RAW_MAGIC) && (width == COVER_RAW_WIDTH) && (height <= COVER_RAW_COV_HEIGHT) &&
+      (size >= COVER_RAW_HEADER_SIZE + width * height * 2)) {
     coversSetImage(width, height, readCoverRow);
+    coverStatus = COVER_STATUS_SHOWN;
+  }
 }
 
 // Returns 1 once gamescan.irx is running, loading it the first time
@@ -1259,8 +1273,10 @@ static void pollCovers(int reopened) {
       coverDoneGame = coverRequested;
       if (coverRequested == coverSelected)
         showCover();
-    } else if (++coverFrames > COVER_TIMEOUT_FRAMES)
+    } else if (++coverFrames > COVER_TIMEOUT_FRAMES) {
       coverPending = 0;
+      coverStatus = COVER_STATUS_TIMEOUT;
+    }
     return;
   }
 
@@ -1279,6 +1295,7 @@ static void pollCovers(int reopened) {
   coverRequested = selected;
   coverPending = 1;
   coverFrames = 0;
+  coverStatus = COVER_STATUS_REQUESTED;
 }
 #endif
 #endif
@@ -1842,9 +1859,11 @@ void drawNonselectableEntryRight(int X, int Y, uint32_t *color, int alpha, const
         DrawNonSelectableItem(settings.enterX, settings.versionY - 18, color, alpha, debug);
 #ifdef LIVESCAN
         if (settings.gamesCovers) {
-          // "cov<1 when ready> e<module error> g<game whose cover was read> r<result> s<sprite submit> t<set texture> l<load image>"
-          snprintf(debug, sizeof(debug), "cov%d e%d g%d r%ld s%lx t%lx l%lx", coversReady, coverError, coverDoneGame,
-                   liveScanAddr ? (long)iopRead(LIVESCAN_FIELD(coverResult)) : 0, coverSpriteAddr, coverTextureAddr, coverLoadImageAddr);
+          // "cov<1 when ready> e<module error> g<game whose cover was read> st<COVER_STATUS_*> r<bytes read or error>
+          // h<first word of the cover> q<request sequence>/<done> m<gamescan.irx found>"
+          snprintf(debug, sizeof(debug), "cov%d e%d g%d st%d r%ld h%lx q%lu/%lu m%d", coversReady, coverError, coverDoneGame, coverStatus,
+                   liveScanAddr ? (long)iopRead(LIVESCAN_FIELD(coverResult)) : 0, coverHeader, coverSeq,
+                   liveScanAddr ? iopRead(LIVESCAN_FIELD(coverDone)) : 0, liveScanAddr != 0);
           DrawNonSelectableItem(settings.enterX, settings.versionY - 36, color, alpha, debug);
         }
 #endif
