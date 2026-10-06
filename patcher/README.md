@@ -161,8 +161,8 @@ Games submenu, centered on `OSDSYS_menu_y`; move the menu to the right with `OSD
 between the panel and the edge of the screen are shortened with "..."). The launcher converts OPL's ART images when the
 list is refreshed (see the launcher's README), and `games_cover_type = ico` shows the disc image instead of the case cover.
 Once the cursor stays on a game for about 0.3 seconds, `gamescan.irx` (loaded from the memory card like for
-`games_live_scan`, which is why both need the modules the patcher writes to `mc?:/SYS-CONF/`) reads its converted cover from
-`mmce0:/ART/OSDHUB` or `mmce1:/ART/OSDHUB` into IOP RAM, pausing the controller for that moment, and it's drawn with
+`games_live_scan`, which is why both need the modules the patcher writes to `mc?:/SYS-CONF/`) reads its converted cover,
+named after the title ID it finds in the games cache, from `mmce0:/ART/OSDHUB` or `mmce1:/ART/OSDHUB` into IOP RAM, pausing the controller for that moment, and it's drawn with
 OSDSYS's own sprite and texture functions, found from the function that draws the button icons, from a texture at the
 end of the video memory. The first cover loads the modules, which pauses OSDSYS briefly.
 With `games_button_debug = 1`, a second line shows `cov<1 when the functions were found>`, `e<module error>`,

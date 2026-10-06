@@ -28,6 +28,9 @@ static unsigned int gameCount;
 
 static void *mmceBuffer = NULL; // mmceman read from the memory card, until it's loaded
 static void *coverBuffer = NULL; // Last cover read (games_covers)
+// Title IDs of the games in the cache, by cache index, read once for the covers
+static char coverIDs[LIVESCAN_MAX_GAMES][GAME_ID_LEN];
+static int coverIDsLoaded = 0;
 static int mmceSize = 0;
 
 static iox_dirent_t dirent __attribute__((aligned(64)));
@@ -780,6 +783,7 @@ static void doScan(void) {
 
   shared.stage = LIVESCAN_STAGE_WRITE;
   res = writeCache();
+  coverIDsLoaded = 0; // The cache order changed
 
 out:
   unlockSIO2();
@@ -789,10 +793,30 @@ out:
   shared.stage = LIVESCAN_STAGE_IDLE;
 }
 
-// Reads the cover coverName from the first MMCE device that has it into coverBuffer (games_covers).
-// mmceman is loaded first if the list wasn't scanned live
+static void loadCoverIDs(void) {
+  memset(coverIDs, 0, sizeof(coverIDs));
+  coverIDsLoaded = 1;
+  char *data = readFile(shared.cachePath);
+  if (!data)
+    return;
+  char *pos = data, *key, *value;
+  int idx = -1;
+  while (nextCacheLine(&pos, &key, &value)) {
+    if (!strcmp(key, "game"))
+      idx++;
+    else if (!strcmp(key, "id") && (idx >= 0) && (idx < LIVESCAN_MAX_GAMES))
+      strncpy(coverIDs[idx], value, GAME_ID_LEN - 1);
+  }
+  FreeSysMemory(data);
+}
+
+// Reads the cover of game coverIndex from the first MMCE device that has it into coverBuffer (games_covers):
+// <title ID><suffix>, or <name><suffix> for games without an ID.
+// The IDs come from the cache on the memory card, and mmceman is loaded first if the list wasn't scanned live
 static void readCover(void) {
   int res = 0;
+  if (!coverIDsLoaded)
+    loadCoverIDs();
   if ((res = findSIO2Lock()))
     goto out;
   if (!shared.mmceLoaded && (res = readMMCE()))
@@ -806,10 +830,13 @@ static void readCover(void) {
   if (!shared.mmceLoaded && (res = startMMCE()))
     goto out;
 
+  const char *name = shared.coverName;
+  if ((shared.coverIndex < LIVESCAN_MAX_GAMES) && coverIDs[shared.coverIndex][0])
+    name = coverIDs[shared.coverIndex];
   res = -2; // ENOENT
   for (int slot = 0; slot < 2; slot++) {
-    char path[LIVESCAN_COVER_NAME_LEN + 24];
-    sprintf(path, "mmce%d:/" COVER_RAW_DIR "/%s", slot, shared.coverName);
+    char path[LIVESCAN_COVER_NAME_LEN + LIVESCAN_COVER_SUFFIX_LEN + 24];
+    sprintf(path, "mmce%d:/" COVER_RAW_DIR "/%s%s", slot, name, shared.coverSuffix);
     int fd = iomanX_open(path, FIO_O_RDONLY);
     if (fd < 0)
       continue;

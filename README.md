@@ -238,8 +238,8 @@ games_neutrino_path = mmce0:/APPS/neutrino/neutrino.elf
 ```
 
 **Game covers** (MMCE games): the cover of the selected game is shown to the left of the Games submenu.
-The covers are OPL's ART images (`<device>:/ART/<ISO name>_COV.jpg` or `.png`, or `<title ID>_COV`), converted by
-"Refresh list" into `ART/OSDHUB/`, so refresh the list after adding covers.
+The covers are OPL's ART images (`<device>:/ART/<title ID>_COV.jpg` or `.png`, like `SLPM_685.13_COV.png`, or
+`<ISO name>_COV`), converted by "Refresh list" into `ART/OSDHUB/`, so refresh the list after adding covers.
 ```ini
 games_covers = 1
 # The disc image (_ICO) instead of the case cover (_COV)

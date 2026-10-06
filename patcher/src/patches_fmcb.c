@@ -1297,9 +1297,14 @@ static void pollCovers(int reopened) {
   const char *name = settings.menuItemName[activeMenu->base + selected];
   if (!strncmp(name, FAVORITE_MARK, strlen(FAVORITE_MARK)))
     name += strlen(FAVORITE_MARK);
-  char coverName[LIVESCAN_COVER_NAME_LEN];
-  snprintf(coverName, sizeof(coverName), "%s%s", name, settings.gamesCoverIco ? COVER_RAW_ICO_SUFFIX : COVER_RAW_COV_SUFFIX);
-  iopWriteString(LIVESCAN_FIELD(coverName), coverName, LIVESCAN_COVER_NAME_LEN);
+  iopWriteString(LIVESCAN_FIELD(coverName), name, LIVESCAN_COVER_NAME_LEN);
+  iopWriteString(LIVESCAN_FIELD(coverSuffix), settings.gamesCoverIco ? COVER_RAW_ICO_SUFFIX : COVER_RAW_COV_SUFFIX, LIVESCAN_COVER_SUFFIX_LEN);
+  iopWrite(LIVESCAN_FIELD(coverIndex), selected);
+  // The covers are named after the title IDs, which gamescan.irx reads from the cache
+  char cachePath[] = GAMES_CACHE_PATH;
+  if (settings.mcSlot == 1)
+    cachePath[2] = '1';
+  iopWriteString(LIVESCAN_FIELD(cachePath), cachePath, LIVESCAN_PATH_LEN);
   // gamescan.irx loads mmceman from the memory card the first time, if the list wasn't scanned live
   char mmcePath[] = LIVESCAN_IRX_MMCEMAN;
   mmcePath[2] = (settings.mcSlot == 1) ? '1' : '0';

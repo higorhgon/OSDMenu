@@ -198,12 +198,12 @@ static int listArt(const char *device, const char *suffix, ArtFile **files) {
   return count;
 }
 
-// Finds the ART image of a game: <ISO name><suffix>.jpg/png, then <title ID><suffix>.jpg/png.
+// Finds the ART image of a game: <title ID><suffix>.jpg/png (OPL's naming), then <ISO name><suffix>.jpg/png.
 // Returns its size, with its path in path, or -1
 static int findSource(const ArtFile *files, int fileCount, const char *device, const char *isoName, const char *id, const char *suffix,
                       char *path, size_t pathSize) {
   static const char *extensions[] = {".jpg", ".png"};
-  const char *names[] = {isoName, id};
+  const char *names[] = {id, isoName};
   for (int n = 0; n < 2; n++) {
     if (!names[n] || !names[n][0])
       continue;
@@ -280,9 +280,9 @@ void convertGameCovers(const CoverGame *games, int count, int ico) {
       }
       found++;
 
-      // Converted again only when the source image changes
+      // Named after the title ID (the game name without one), converted again only when the source image changes
       char dest[256];
-      snprintf(dest, sizeof(dest), "%s/" COVER_RAW_DIR "/%s%s", device, games[i].name, rawSuffix);
+      snprintf(dest, sizeof(dest), "%s/" COVER_RAW_DIR "/%s%s", device, games[i].id[0] ? games[i].id : games[i].name, rawSuffix);
       msg("[%d/%d] %.40s: ", ++done, total, games[i].name);
       if (convertedSourceSize(dest) == sourceSize) {
         msg("up to date\n");

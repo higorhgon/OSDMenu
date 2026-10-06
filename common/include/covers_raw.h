@@ -2,7 +2,8 @@
 #define _COVERS_RAW_H_
 
 // Game covers (games_covers): the launcher converts OPL's ART images when the list is refreshed into
-// <device>:/ART/OSDHUB/<game name><COVER_RAW_*_SUFFIX>, which gamescan.irx reads for the patcher.
+// <device>:/ART/OSDHUB/<title ID><COVER_RAW_*_SUFFIX> (or <game name><COVER_RAW_*_SUFFIX> for games without an ID),
+// which gamescan.irx reads for the patcher.
 //
 // A converted cover is a COVER_RAW_HEADER_SIZE-byte header followed by width x height 16-bit pixels
 // in the GS PSMCT16 format (bits 0-4 red, 5-9 green, 10-14 blue, 15 opaque), little endian, row by row

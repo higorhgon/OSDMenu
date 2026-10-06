@@ -46,7 +46,7 @@ app_gameid = 0
 # for the duration of the scan; 2 also writes diagnostics logs to mc?:/SYS-CONF/ (see patcher/README.md)
 # games_live_scan = 0
 # MMCE only: 1 shows the cover of the selected game to the left of the Games submenu (move the menu with OSDSYS_menu_x).
-# The covers are OPL's ART/<ISO name or title ID>_COV.jpg/png, converted by "Refresh list" into ART/OSDHUB/
+# The covers are OPL's ART/<title ID or ISO name>_COV.jpg/png, converted by "Refresh list" into ART/OSDHUB/
 # games_covers = 0
 # cov (the case cover) or ico (the disc image, ART/..._ICO.jpg/png)
 # games_cover_type = cov
