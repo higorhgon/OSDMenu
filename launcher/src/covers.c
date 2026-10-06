@@ -7,8 +7,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
+#define NEWLIB_PORT_AWARE
+#include <fileXio_rpc.h>
+#include <io_common.h>
 
 // Only the JPEG and PNG decoders, reading from memory
 #define STB_IMAGE_IMPLEMENTATION
@@ -27,16 +32,6 @@
 //
 
 #define COVER_SOURCE_MAX_SIZE (4 * 1024 * 1024)
-
-// Returns the size of the file at path, or -1
-static int fileSize(const char *path) {
-  int fd = open(path, O_RDONLY);
-  if (fd < 0)
-    return -1;
-  int size = lseek(fd, 0, SEEK_END);
-  close(fd);
-  return size;
-}
 
 // Returns the source size recorded in the converted cover at path, or -1 if it's missing or invalid
 static int convertedSourceSize(const char *path) {
@@ -101,19 +96,34 @@ static void scaleImage(const uint8_t *src, int srcWidth, int srcHeight, uint16_t
   }
 }
 
-// Converts the image at source into dest. Returns 0 on success
+// Images with more pixels than this are skipped, since decoding them takes too long and too much memory
+#define COVER_SOURCE_MAX_PIXELS (1024 * 1024)
+
+// Milliseconds since the first call, to show how long each step takes
+static uint32_t elapsedMs(void) { return (uint32_t)((uint64_t)clock() * 1000 / CLOCKS_PER_SEC); }
+
+// Converts the image at source into dest, showing each step so a step that hangs can be seen on screen.
+// Returns 0 on success
 static int convertCover(const char *source, const char *dest, int ico) {
+  uint32_t start = elapsedMs();
+  msg("read ");
   int size;
   uint8_t *data = readSource(source, &size);
   if (!data)
     return -1;
 
   int srcWidth, srcHeight, components;
+  if (!stbi_info_from_memory(data, size, &srcWidth, &srcHeight, &components) || ((uint64_t)srcWidth * srcHeight > COVER_SOURCE_MAX_PIXELS)) {
+    free(data);
+    return -6;
+  }
+  msg("%dx%d decode ", srcWidth, srcHeight);
   uint8_t *image = stbi_load_from_memory(data, size, &srcWidth, &srcHeight, &components, 4);
   free(data);
   if (!image)
     return -2;
 
+  msg("scale ");
   int height = ico ? COVER_RAW_ICO_HEIGHT : COVER_RAW_COV_HEIGHT;
   int rawSize = COVER_RAW_HEADER_SIZE + COVER_RAW_WIDTH * height * 2;
   uint32_t *raw = malloc(rawSize);
@@ -128,6 +138,7 @@ static int convertCover(const char *source, const char *dest, int ico) {
   scaleImage(image, srcWidth, srcHeight, (uint16_t *)&raw[COVER_RAW_HEADER_SIZE / 4], COVER_RAW_WIDTH, height, !ico);
   stbi_image_free(image);
 
+  msg("write ");
   int res = -4;
   int fd = open(dest, O_WRONLY | O_CREAT | O_TRUNC, 0666);
   if (fd >= 0) {
@@ -135,79 +146,155 @@ static int convertCover(const char *source, const char *dest, int ico) {
     close(fd);
   }
   free(raw);
+  if (!res)
+    msg("ok %lu ms\n", (unsigned long)(elapsedMs() - start));
   return res;
 }
 
-// Finds the ART image of a game: <ART>/<ISO name><suffix>.jpg/png, then <ART>/<title ID><suffix>.jpg/png.
+// ART images of one device, listed once instead of trying to open every possible name
+typedef struct {
+  char name[96];
+  int size;
+} ArtFile;
+#define ART_MAX_FILES 1024
+
+// Returns 1 if name contains part, ignoring case
+static int containsNoCase(const char *name, const char *part) {
+  size_t len = strlen(part);
+  for (; *name; name++)
+    if (!strncasecmp(name, part, len))
+      return 1;
+  return 0;
+}
+
+// Lists the files in <device>/ART whose name has suffix (like "_COV."), returns their number
+static int listArt(const char *device, const char *suffix, ArtFile **files) {
+  *files = NULL;
+  char dir[32];
+  snprintf(dir, sizeof(dir), "%s/ART", device);
+  int dfd = fileXioDopen(dir);
+  if (dfd < 0)
+    return 0;
+
+  int count = 0, max = 0;
+  iox_dirent_t dirent;
+  while ((fileXioDread(dfd, &dirent) > 0) && (count < ART_MAX_FILES)) {
+    if (FIO_S_ISDIR(dirent.stat.mode) || !containsNoCase(dirent.name, suffix) || (strlen(dirent.name) >= sizeof((*files)->name)))
+      continue;
+    if (count == max) {
+      max += 64;
+      ArtFile *grown = realloc(*files, max * sizeof(ArtFile));
+      if (!grown)
+        break;
+      *files = grown;
+    }
+    strcpy((*files)[count].name, dirent.name);
+    (*files)[count].size = dirent.stat.size;
+    count++;
+  }
+  fileXioDclose(dfd);
+  return count;
+}
+
+// Finds the ART image of a game: <ISO name><suffix>.jpg/png, then <title ID><suffix>.jpg/png.
 // Returns its size, with its path in path, or -1
-static int findSource(const char *device, const char *isoName, const char *id, const char *suffix, char *path, size_t pathSize) {
+static int findSource(const ArtFile *files, int fileCount, const char *device, const char *isoName, const char *id, const char *suffix,
+                      char *path, size_t pathSize) {
   static const char *extensions[] = {".jpg", ".png"};
   const char *names[] = {isoName, id};
   for (int n = 0; n < 2; n++) {
     if (!names[n] || !names[n][0])
       continue;
     for (int e = 0; e < 2; e++) {
-      snprintf(path, pathSize, "%s/ART/%s%s%s", device, names[n], suffix, extensions[e]);
-      int size = fileSize(path);
-      if (size > 0)
-        return size;
+      char name[sizeof(files->name)];
+      snprintf(name, sizeof(name), "%s%s%s", names[n], suffix, extensions[e]);
+      for (int f = 0; f < fileCount; f++) {
+        if (!strcasecmp(files[f].name, name) && (files[f].size > 0)) {
+          snprintf(path, pathSize, "%s/ART/%s", device, files[f].name);
+          return files[f].size;
+        }
+      }
     }
   }
   return -1;
 }
 
+// Device ("mmce0:") of path in device, or 0 if it's not an MMCE path
+static int mmceDevice(const char *path, char *device, size_t size) {
+  const char *colon = strchr(path, ':');
+  if (strncmp(path, "mmce", 4) || !colon || ((size_t)(colon - path + 1) >= size))
+    return 0;
+  memcpy(device, path, colon - path + 1);
+  device[colon - path + 1] = '\0';
+  return 1;
+}
+
 void convertGameCovers(const CoverGame *games, int count, int ico) {
   const char *suffix = ico ? "_ICO" : "_COV";
   const char *rawSuffix = ico ? COVER_RAW_ICO_SUFFIX : COVER_RAW_COV_SUFFIX;
-  int converted = 0, found = 0;
-  char lastDevice[16] = "";
+  int converted = 0, found = 0, failed = 0, done = 0;
+  char listedDevice[16] = "";
+  ArtFile *files = NULL;
+  int fileCount = 0;
+  uint32_t start = elapsedMs();
 
-  for (int i = 0; i < count; i++) {
-    // Only MMCE: the patcher reads the covers with gamescan.irx's mmceman
-    const char *path = games[i].path;
-    const char *colon = strchr(path, ':');
-    if (strncmp(path, "mmce", 4) || !colon || ((colon - path + 1) >= (int)sizeof(lastDevice)))
-      continue;
-    char device[16];
-    memcpy(device, path, colon - path + 1);
-    device[colon - path + 1] = '\0';
+  // Games with a cover
+  int total = 0;
+  for (int pass = 0; pass < 2; pass++) {
+    for (int i = 0; i < count; i++) {
+      // Only MMCE: the patcher reads the covers with gamescan.irx's mmceman
+      char device[16];
+      if (!mmceDevice(games[i].path, device, sizeof(device)))
+        continue;
+      if (strcmp(device, listedDevice)) {
+        free(files);
+        msg("Covers: listing %s/ART... ", device);
+        fileCount = listArt(device, ico ? "_ICO." : "_COV.", &files);
+        msg("%d images\n", fileCount);
+        strcpy(listedDevice, device);
+        if (pass && fileCount) {
+          char dir[32];
+          snprintf(dir, sizeof(dir), "%s/" COVER_RAW_DIR, device);
+          msg("Covers: creating %s\n", dir);
+          mkdir(dir, 0777);
+        }
+      }
 
-    // ISO name without the extension
-    char isoName[128];
-    const char *slash = strrchr(path, '/');
-    snprintf(isoName, sizeof(isoName), "%s", slash ? slash + 1 : colon + 1);
-    char *ext = strrchr(isoName, '.');
-    if (ext)
-      *ext = '\0';
+      // ISO name without the extension
+      char isoName[128];
+      const char *slash = strrchr(games[i].path, '/');
+      snprintf(isoName, sizeof(isoName), "%s", slash ? slash + 1 : games[i].path);
+      char *ext = strrchr(isoName, '.');
+      if (ext)
+        *ext = '\0';
 
-    char source[256];
-    int sourceSize = findSource(device, isoName, games[i].id, suffix, source, sizeof(source));
-    if (sourceSize < 0)
-      continue;
-    found++;
+      char source[256];
+      int sourceSize = findSource(files, fileCount, device, isoName, games[i].id, suffix, source, sizeof(source));
+      if (sourceSize < 0)
+        continue;
+      if (!pass) {
+        total++;
+        continue;
+      }
+      found++;
 
-    if (strcmp(device, lastDevice)) {
-      if (!lastDevice[0])
-        msg("Converting covers...\n");
-      char dir[32];
-      snprintf(dir, sizeof(dir), "%s/ART", device);
-      mkdir(dir, 0777);
-      snprintf(dir, sizeof(dir), "%s/" COVER_RAW_DIR, device);
-      mkdir(dir, 0777);
-      strcpy(lastDevice, device);
+      // Converted again only when the source image changes
+      char dest[256];
+      snprintf(dest, sizeof(dest), "%s/" COVER_RAW_DIR "/%s%s", device, games[i].name, rawSuffix);
+      msg("[%d/%d] %.40s: ", ++done, total, games[i].name);
+      if (convertedSourceSize(dest) == sourceSize) {
+        msg("up to date\n");
+        continue;
+      }
+      int res = convertCover(source, dest, ico);
+      if (res) {
+        msg("failed (%d)\n", res);
+        failed++;
+      } else
+        converted++;
     }
-
-    // Converted again only when the source image changes
-    char dest[256];
-    snprintf(dest, sizeof(dest), "%s/" COVER_RAW_DIR "/%s%s", device, games[i].name, rawSuffix);
-    if (convertedSourceSize(dest) == sourceSize)
-      continue;
-    int res = convertCover(source, dest, ico);
-    if (res)
-      DPRINTF("Covers: failed to convert %s: %d\n", source, res);
-    else
-      converted++;
+    listedDevice[0] = '\0'; // List again for the second pass
   }
-  if (found)
-    msg("Covers: %d found, %d converted\n", found, converted);
+  free(files);
+  msg("Covers: %d found, %d converted, %d failed in %lu s\n", found, converted, failed, (unsigned long)((elapsedMs() - start) / 1000));
 }
