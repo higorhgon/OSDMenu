@@ -177,19 +177,34 @@ static int findGameID(const char *s, char *out) {
 
 static uint32_t readLE32(const uint8_t *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24); }
 
-// Reads the title ID from the ISO: the BOOT2 line of SYSTEM.CNF, or any
-// title ID-like file name in the root directory as a fallback
-static int getISOGameID(const char *isoPath, char *out) {
+// Reads count 2048-byte sectors from lba into buf, from a disc image with sectorSize-byte sectors
+// whose data starts dataOffset bytes into each sector (2048/0 for ISOs, 2352/24 for PS1 MODE2 tracks)
+static int readDiscSectors(int fd, uint32_t lba, int count, int sectorSize, int dataOffset, uint8_t *buf) {
+  for (int i = 0; i < count; i++) {
+    if ((lseek(fd, (off_t)(lba + i) * sectorSize + dataOffset, SEEK_SET) < 0) || (read(fd, &buf[i * 2048], 2048) != 2048))
+      return -1;
+    if (sectorSize == 2048) { // Contiguous: the rest in one read
+      int rest = (count - i - 1) * 2048;
+      return (rest && (read(fd, &buf[(i + 1) * 2048], rest) != rest)) ? -1 : 0;
+    }
+  }
+  return 0;
+}
+
+// Reads the title ID from a disc image: the BOOT2 (PS2) or BOOT (PS1) line of SYSTEM.CNF
+// ("cdrom0:\SLUS_202.12;1", "cdrom:\SCUS_949.00;1"), or any title ID-like file name in the root
+// directory as a fallback (early PS1 discs have no SYSTEM.CNF)
+static int getDiscGameID(const char *path, int sectorSize, int dataOffset, char *out) {
   static uint8_t buf[8192];
   int found = 0;
   char fallback[GAMES_ID_LEN] = {0};
 
-  int fd = open(isoPath, O_RDONLY);
+  int fd = open(path, O_RDONLY);
   if (fd < 0)
     return 0;
 
   // Primary Volume Descriptor
-  if ((lseek(fd, 16 * 2048, SEEK_SET) < 0) || (read(fd, buf, 2048) != 2048) || (buf[0] != 1) || memcmp(&buf[1], "CD001", 5))
+  if (readDiscSectors(fd, 16, 1, sectorSize, dataOffset, buf) || (buf[0] != 1) || memcmp(&buf[1], "CD001", 5))
     goto out;
 
   // Root directory record starts at offset 156
@@ -197,7 +212,8 @@ static int getISOGameID(const char *isoPath, char *out) {
   uint32_t rootSize = readLE32(&buf[156 + 10]);
   if (rootSize > sizeof(buf))
     rootSize = sizeof(buf);
-  if ((lseek(fd, rootLBA * 2048, SEEK_SET) < 0) || (read(fd, buf, rootSize) != (int)rootSize))
+  rootSize &= ~2047;
+  if (!rootSize || readDiscSectors(fd, rootLBA, rootSize / 2048, sectorSize, dataOffset, buf))
     goto out;
 
   uint32_t cnfLBA = 0, cnfSize = 0;
@@ -225,19 +241,18 @@ static int getISOGameID(const char *isoPath, char *out) {
     off += len;
   }
 
-  if (cnfLBA) {
-    if (cnfSize > 1023)
-      cnfSize = 1023;
-    if ((lseek(fd, cnfLBA * 2048, SEEK_SET) >= 0) && (read(fd, buf, cnfSize) == (int)cnfSize)) {
-      buf[cnfSize] = '\0';
-      // BOOT2 = cdrom0:\SLUS_202.12;1
-      char *boot = strstr((char *)buf, "BOOT2");
-      if (boot && (boot = strstr(boot, "cdrom0:"))) {
-        boot += 7;
-        while ((*boot == '\\') || (*boot == '/'))
-          boot++;
-        found = parseGameID(boot, out);
-      }
+  if (cnfLBA && !readDiscSectors(fd, cnfLBA, 1, sectorSize, dataOffset, buf)) {
+    if (cnfSize > 2047)
+      cnfSize = 2047;
+    buf[cnfSize] = '\0';
+    // The file name after the last separator of the BOOT2/BOOT line
+    char *boot = strstr((char *)buf, "BOOT");
+    if (boot && (boot = strchr(boot, ':'))) {
+      char *file = ++boot;
+      for (; *boot && (*boot != '\n') && (*boot != '\r') && (*boot != ';'); boot++)
+        if ((*boot == '\\') || (*boot == '/') || (*boot == ':'))
+          file = boot + 1;
+      found = parseGameID(file, out);
     }
   }
 
@@ -249,6 +264,53 @@ static int getISOGameID(const char *isoPath, char *out) {
 out:
   close(fd);
   return found;
+}
+
+static int getISOGameID(const char *isoPath, char *out) { return getDiscGameID(isoPath, 2048, 0, out); }
+
+// Reads the title ID of a PS1 game from the first track of its CUE sheet (cuePath in dirPath)
+static int getCueGameID(const char *dirPath, const char *cuePath, char *out) {
+  char cue[2048];
+  int fd = open(cuePath, O_RDONLY);
+  if (fd < 0)
+    return 0;
+  int len = read(fd, cue, sizeof(cue) - 1);
+  close(fd);
+  if (len <= 0)
+    return 0;
+  cue[len] = '\0';
+
+  // FILE "name.bin" BINARY, then TRACK 01 MODE2/2352
+  char bin[GAMES_NAME_LEN] = {0};
+  int sectorSize = 2352, dataOffset = 24;
+  char *file = strstr(cue, "FILE");
+  if (!file)
+    return 0;
+  file += 4;
+  while (*file == ' ' || *file == '\t')
+    file++;
+  char end = ' ';
+  if (*file == '"') {
+    file++;
+    end = '"';
+  }
+  int n = 0;
+  while (file[n] && (file[n] != end) && (file[n] != '\r') && (file[n] != '\n') && (n < (int)sizeof(bin) - 1)) {
+    bin[n] = file[n];
+    n++;
+  }
+  char *mode = strstr(cue, "MODE");
+  if (mode && !strncmp(mode, "MODE1/2352", 10))
+    dataOffset = 16;
+  else if (mode && (!strncmp(mode, "MODE1/2048", 10) || !strncmp(mode, "MODE2/2048", 10))) {
+    sectorSize = 2048;
+    dataOffset = 0;
+  }
+
+  char binPath[GAMES_REL_PATH_LEN];
+  if (snprintf(binPath, sizeof(binPath), "%s/%s", dirPath, bin) >= (int)sizeof(binPath))
+    return 0;
+  return getDiscGameID(binPath, sectorSize, dataOffset, out);
 }
 
 // Adds a game to the in-memory list if there's room left
@@ -346,8 +408,8 @@ static int scanFolder(const char *mountpoint, const char *folder, GameMediaType 
   return 1;
 }
 
-// Returns 1 if dirPath contains a *.cue file
-static int hasCueFile(const char *dirPath) {
+// Finds a *.cue file in dirPath, returning 1 with its name in cueName
+static int findCueFile(const char *dirPath, char *cueName, size_t size) {
   int dfd = fileXioDopen(dirPath);
   if (dfd < 0)
     return 0;
@@ -358,7 +420,10 @@ static int hasCueFile(const char *dirPath) {
     if (FIO_S_ISDIR(dirent.stat.mode))
       continue;
     char *ext = strrchr(dirent.name, '.');
-    found = (ext && !strcasecmp(ext, ".cue"));
+    if (ext && !strcasecmp(ext, ".cue") && (strlen(dirent.name) < size)) {
+      strcpy(cueName, dirent.name);
+      found = 1;
+    }
   }
   fileXioDclose(dfd);
   return found;
@@ -393,7 +458,8 @@ static int scanEmberFolder(const char *mountpoint, int *emberFound, int *entries
     if (((strlen(gamesPath) + strlen(dirent.name) + 2) > GAMES_REL_PATH_LEN) || (strlen(dirent.name) >= GAMES_NAME_LEN))
       continue;
     snprintf(path, sizeof(path), "%s/%s", gamesPath, dirent.name);
-    if (!hasCueFile(path))
+    char cueName[GAMES_NAME_LEN];
+    if (!findCueFile(path, cueName, sizeof(cueName)))
       continue;
 
     if (gameCount >= GAMES_MAX_ENTRIES) {
@@ -405,9 +471,12 @@ static int scanEmberFolder(const char *mountpoint, int *emberFound, int *entries
     snprintf(g->path, GAMES_REL_PATH_LEN, "%s", path);
     g->neutrinoDriver = NULL;
     g->media = GameMedia_CD;
-    // A title ID in the folder name names the game's cover
-    if (!findGameID(dirent.name, g->id))
-      g->id[0] = '\0';
+    // The title ID from SYSTEM.CNF on the disc, or from the folder name; it names the game's cover
+    char cuePath[GAMES_REL_PATH_LEN];
+    g->id[0] = '\0';
+    if ((snprintf(cuePath, sizeof(cuePath), "%s/%s", path, cueName) >= (int)sizeof(cuePath)) || !getCueGameID(path, cuePath, g->id))
+      if (!findGameID(dirent.name, g->id))
+        g->id[0] = '\0';
   }
   fileXioDclose(dfd);
   return 1;

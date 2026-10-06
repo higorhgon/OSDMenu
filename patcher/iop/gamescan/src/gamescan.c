@@ -454,6 +454,11 @@ static int writeCache(void) {
           shared.fav[current / 32] |= 1u << (current % 32);
       } else if ((current >= 0) && !strcmp(key, "played"))
         shared.played[current] = parseUInt(value);
+      else if ((current >= 0) && !strcmp(key, "id") && !gameIDs[current][0]) {
+        // Keeps the IDs the launcher read from the PS1 discs, which the live scan doesn't read
+        strncpy(gameIDs[current], value, GAME_ID_LEN - 1);
+        gameIDs[current][GAME_ID_LEN - 1] = '\0';
+      }
       else if ((current >= 0) && !useFavInput && !strcmp(key, "fav") && parseUInt(value))
         shared.fav[current / 32] |= 1u << (current % 32);
     }

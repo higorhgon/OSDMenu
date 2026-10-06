@@ -129,8 +129,10 @@ The slot the ELF is loaded from is skipped when the ELF is on a memory card (`mc
 With `games_covers = 1`, "Refresh list" also converts the covers of the games on MMCE devices for the patcher, which
 draws the one of the selected game (see the patcher's README), in the Games and PSX submenus. For each game,
 `<device>:/ART/<title ID>_COV.jpg/png` (OPL's naming, like `SLPM_685.13_COV.png`) is used, or
-`<device>:/ART/<ISO name>_COV.jpg/png` (`<game folder>_COV.jpg/png` for PS1 games, like RiptOPL; the title ID is only known
-when it's in the folder name), and `_ICO` (the disc image) instead of `_COV` with `games_cover_type = ico`.
+`<device>:/ART/<ISO name>_COV.jpg/png` (`<game folder>_COV.jpg/png` for PS1 games, like RiptOPL), and `_ICO` (the disc
+image) instead of `_COV` with `games_cover_type = ico`. The title ID of a PS1 game is read from `SYSTEM.CNF` in the first
+track of its CUE sheet (`BOOT = cdrom:\SCUS_949.00;1`), like the ISO's for PS2 games, and kept by the live scan.
+[osdhub-manager](https://github.com/higorhgon/osdhub-manager) downloads the ART images by title ID from a computer.
 Each one is scaled to 128x180 (72x72 for discs, the size of OSD-XMB's game icons), converted to 16-bit color and written
 to `<device>:/ART/OSDHUB/<title ID>_COV.RAW` (`_ICO.RAW`; the game name for games without a title ID), and only
 converted again when the image changes.
