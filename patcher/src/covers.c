@@ -121,12 +121,13 @@ void coversInit(uint32_t drawIcon) {
 
 static int coverWidth = 0; // Size of the cover in the texture, 0 when there's none
 static int coverHeight = 0;
+static int coverVisible = 0;
 
 // The cover is uploaded two lines at a time from a buffer on the stack, since the patcher's memory is full
 #define UPLOAD_ROWS 2
 
 void coversSetImage(int width, int height, void (*readRow)(int y, uint16_t *row)) {
-  coverWidth = 0;
+  coverWidth = coverVisible = 0;
   if (!coversReady || (width > COVER_TEX_WIDTH) || (height > COVER_TEX_HEIGHT))
     return;
 
@@ -153,9 +154,12 @@ void coversSetImage(int width, int height, void (*readRow)(int y, uint16_t *row)
   }
   coverWidth = width;
   coverHeight = height;
+  coverVisible = 1;
 }
 
-void coversClear(void) { coverWidth = 0; }
+void coversClear(void) { coverVisible = 0; }
+
+void coversShow(void) { coverVisible = (coverWidth != 0); }
 
 static void setRect(OSDSprite *sprite, int x0, int y0, int x1, int y1) {
   sprite->x0 = x0 << 4;
@@ -165,7 +169,7 @@ static void setRect(OSDSprite *sprite, int x0, int y0, int x1, int y1) {
 }
 
 void coversDraw(int alpha) {
-  if (!coversReady || !coverWidth)
+  if (!coversReady || !coverVisible)
     return;
 
   // Dark panel behind the cover, only shown with a cover

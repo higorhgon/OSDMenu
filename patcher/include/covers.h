@@ -15,8 +15,11 @@ void coversInitText(uint32_t drawMenuItem);
 // with readRow(), and shows it
 void coversSetImage(int width, int height, void (*readRow)(int y, uint16_t *row));
 
-// Hides the cover, leaving only the panel
+// Hides the cover, keeping it in the video memory
 void coversClear(void);
+
+// Shows the cover in the video memory again
+void coversShow(void);
 
 // Draws the panel and the cover; called from the button panel, once per frame while the Games submenu is shown,
 // with the button panel's alpha (0-0x80, it fades in)

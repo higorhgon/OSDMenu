@@ -1174,7 +1174,8 @@ static void pollLiveScan(void) {
 #define COVER_TIMEOUT_FRAMES 300 // ~5 seconds
 static int coverSelected = -1;   // Cache index of the selected game
 static int coverRequested = -1;  // Game whose cover was requested
-static int coverDoneGame = -1;   // Game whose cover is shown, or that has none
+static int coverDoneGame = -1;   // Game whose cover was read last, or that has none
+static int coverTextureGame = -1; // Game whose cover is in the video memory
 static int coverFrames = 0;
 static int coverPending = 0;     // Waiting for gamescan.irx to read the cover
 static uint32_t coverSeq = 0;
@@ -1219,6 +1220,7 @@ static void showCover(void) {
   if ((coverHeader == COVER_RAW_MAGIC) && (width == COVER_RAW_WIDTH) && (height <= COVER_RAW_COV_HEIGHT) &&
       (size >= COVER_RAW_HEADER_SIZE + width * height * 2)) {
     coversSetImage(width, height, readCoverRow);
+    coverTextureGame = coverRequested;
     coverStatus = COVER_STATUS_SHOWN;
   }
 }
@@ -1257,14 +1259,22 @@ static int coverModuleReady(void) {
 static void pollCovers(int reopened) {
   if (reopened) {
     coversClear();
-    coverDoneGame = coverSelected = -1;
+    coverDoneGame = coverSelected = coverTextureGame = -1;
   }
+  // Moving to "< Back" or "Refresh list" and back shows the cover still in the video memory again,
+  // and another game's cover is read once the cursor stays on it
   int selected = selectedGame();
   if (selected != coverSelected) {
     coverSelected = selected;
     coverFrames = 0;
-    if (selected != coverDoneGame)
+    if ((selected >= 0) && (selected == coverTextureGame)) {
+      coversShow();
+      coverDoneGame = selected;
+    } else {
       coversClear();
+      if (selected != coverDoneGame)
+        coverDoneGame = -1;
+    }
   }
 
   if (coverPending) {
