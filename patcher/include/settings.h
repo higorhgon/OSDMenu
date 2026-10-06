@@ -112,6 +112,7 @@ typedef struct {
   char bootPath[64]; // argv[0] of the patcher, passed to the launcher so it can return to OSDMenu
   int reopenSubmenu; // SUBMENU_* + 1 to open as soon as the menu is shown (GAMES_REOPEN_ARG/PSX_REOPEN_ARG), 0 for none
   int buttonDebug;   // Show the OSDSYS button icon types in the submenu prompts (games_button_debug)
+  int gamesCovers;   // Draw game covers to the left of the games submenus (games_covers, prototype)
   MenuGroup groups[MENU_GROUPS];
   int groupCount;
   int groupBackSlot; // menuItemName slot of the groups' "< Back" label

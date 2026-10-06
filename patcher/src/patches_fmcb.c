@@ -1,6 +1,7 @@
 // FMCB 1.8 OSDSYS patches by Neme
 // FMCB 1.9 patches by sp193
 #include "patches_fmcb.h"
+#include "covers.h"
 #include "init.h"
 #include "launcher.h"
 #include "patches_common.h"
@@ -1598,12 +1599,6 @@ void patchMenuDraw(uint8_t *osd) {
 
 static void (*DrawNonSelectableItem)(int X, int Y, uint32_t *color, int alpha, const char *string);
 static void (*DrawIcon)(int type, int X, int Y, int alpha);
-
-void getOSDDrawFunctions(uint32_t funcs[3]) {
-  funcs[0] = (uint32_t)DrawIcon;
-  funcs[1] = (uint32_t)DrawNonSelectableItem;
-  funcs[2] = (uint32_t)DrawMenuItem;
-}
 static void (*DrawButtonPanelGetOSDLang)(void);
 
 int ButtonsPanel_Type = 0;
@@ -1713,6 +1708,12 @@ void drawNonselectableEntryRight(int X, int Y, uint32_t *color, int alpha, const
         for (int i = 0; (i < seenIconCount) && (len < (int)sizeof(debug) - 4); i++)
           len += snprintf(&debug[len], sizeof(debug) - len, "%s%d", i ? "," : "", seenIconTypes[i]);
         DrawNonSelectableItem(settings.enterX, settings.versionY - 18, color, alpha, debug);
+        if (settings.gamesCovers) {
+          // "cov<1 when ready> s<sprite submit> t<set texture> l<load image> y<sync path>"
+          snprintf(debug, sizeof(debug), "cov%d s%lx t%lx l%lx y%lx", coversReady, coverSpriteAddr, coverTextureAddr, coverLoadImageAddr,
+                   coverSyncPathAddr);
+          DrawNonSelectableItem(settings.enterX, settings.versionY - 36, color, alpha, debug);
+        }
       }
       // Short texts, since the four prompts share the space of two
       DrawNonSelectableItem(sortPromptX() + 28, settings.versionY, color, alpha, activeMenu->sortRecent ? "[Recent]" : "[A-Z]");
@@ -1743,6 +1744,13 @@ void drawIconLeft(int type, int X, int Y, int alpha) {
       enterIconType = type;
       deriveSubmenuIcons();
     }
+    // Game covers, drawn before the icon so DrawIcon() selects its own texture again
+    static GamesSubmenu *coversMenu = NULL;
+    if (settings.gamesCovers && showSubmenuPrompts() && activeMenu) {
+      coversDraw(coversMenu != activeMenu, alpha);
+      coversMenu = activeMenu;
+    } else
+      coversMenu = NULL;
 #endif
     DrawIcon(type, settings.enterX, settings.enterY, alpha);
   } else {
@@ -1834,6 +1842,10 @@ void patchMenuButtonPanel(uint8_t *osd) {
   tmp &= 0x03ffffff;
   tmp <<= 2;
   DrawIcon = (void *)tmp;
+#ifndef HOSD
+  if (settings.gamesCovers)
+    coversInit((uint32_t)DrawIcon);
+#endif
 
   tmp = 0x0c000000;
   tmp |= ((uint32_t)drawIconRight >> 2);

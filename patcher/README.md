@@ -148,13 +148,19 @@ The button prompts at the bottom show "Back" instead of "Version", the current s
 "Favorite" while a submenu is open. Triangle is hidden from OSDSYS while a submenu or group is shown, so it doesn't open the
 Version screen (the patcher finds `scePadRead()` after `scePadPortOpen()` for this; `games_button_debug = 1` shows its
 address and the number of calls redirected to the hook as `r<address>/<calls>`, and how many times OSDSYS called the hook
-as `n`. With `games_live_scan = 2`, the libpad code is also written to `mc?:/SYS-CONF/OSDMLIVE.LOG` on boot, along with
-the code of OSDSYS's drawing functions and the ones they call, for the game covers investigation. The OSDSYS image as loaded
-is also written once to `mc?:/SYS-CONF/OSDSYS.BIN` (1 MB, a few seconds on the first boot; delete it to write it again)).
+as `n`. With `games_live_scan = 2`, the addresses found are also written to `mc?:/SYS-CONF/OSDMLIVE.LOG` on boot, and the
+OSDSYS image as loaded is written once to `mc?:/SYS-CONF/OSDSYS.BIN` for the game covers investigation (1 MB, a few seconds
+on the first boot; delete it to write it again)).
 The Circle and Square icons are derived from the icons OSDSYS uses for Enter and Version (Triangle); if they can't be derived,
 only the texts are shown. `games_button_debug = 1` shows the icon types in a line above the prompts: `e` (Enter),
 `v` (Version), `b` (Back), `s` (Sort) and `seen` (icons seen in other screens such as System Configuration, which shows
 Circle and Square).
+
+`games_covers = 1` (prototype, default `0`) draws a panel with a test picture to the left of the games submenus, centered on
+`OSDSYS_menu_y`, using OSDSYS's own sprite and texture functions (found from the function that draws the button icons).
+Move the menu to the right with `OSDSYS_menu_x` so it doesn't overlap. With `games_button_debug = 1`, a second line shows
+`cov<1 when the functions were found>` and their addresses: sprite submit (`s`), texture selection (`t`), texture upload (`l`)
+and wait (`y`).
 
 These options are also read by the **launcher**:
 - `games_device_usb`, `games_device_mx4sio`, `games_device_mmce` — enable scanning each device type (default: all disabled)
