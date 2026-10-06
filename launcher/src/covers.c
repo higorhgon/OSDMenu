@@ -23,6 +23,8 @@
 #define STBI_NO_LINEAR
 #define STBI_NO_HDR
 #define STBI_NO_FAILURE_STRINGS
+// No thread-local variables: they're emulated through __emutls_get_address(), which hangs in the launcher
+#define STBI_NO_THREAD_LOCALS
 #include "../third_party/stb_image.h"
 
 //
