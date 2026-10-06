@@ -149,7 +149,8 @@ The button prompts at the bottom show "Back" instead of "Version", the current s
 Version screen (the patcher finds `scePadRead()` after `scePadPortOpen()` for this; `games_button_debug = 1` shows its
 address and the number of calls redirected to the hook as `r<address>/<calls>`, and how many times OSDSYS called the hook
 as `n`. With `games_live_scan = 2`, the libpad code is also written to `mc?:/SYS-CONF/OSDMLIVE.LOG` on boot, along with
-the code of OSDSYS's drawing functions and the ones they call, for the game covers investigation).
+the code of OSDSYS's drawing functions and the ones they call, for the game covers investigation. The OSDSYS image as loaded
+is also written once to `mc?:/SYS-CONF/OSDSYS.BIN` (1 MB, a few seconds on the first boot; delete it to write it again)).
 The Circle and Square icons are derived from the icons OSDSYS uses for Enter and Version (Triangle); if they can't be derived,
 only the texts are shown. `games_button_debug = 1` shows the icon types in a line above the prompts: `e` (Enter),
 `v` (Version), `b` (Back), `s` (Sort) and `seen` (icons seen in other screens such as System Configuration, which shows

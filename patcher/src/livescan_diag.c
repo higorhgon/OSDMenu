@@ -95,6 +95,28 @@ static void logDrawFunctions(uint8_t *osd) {
   }
 }
 
+// Covers investigation: the OSDSYS image as loaded (code and initialized data), to find how OSDSYS uploads
+// textures and where the video memory is free without a log round trip per function.
+// Written once, as mc?:/SYS-CONF/OSDSYS.BIN, since writing 1 MB to the memory card takes a few seconds
+#define DIAG_IMAGE_CHUNK 0x10000
+
+static void writeOSDSYSImage(uint8_t *osd) {
+  char path[] = "mc0:/SYS-CONF/OSDSYS.BIN";
+  if (settings.mcSlot == 1)
+    path[2] = '1';
+  int fd = fioOpen(path, FIO_O_RDONLY);
+  if (fd >= 0) {
+    fioClose(fd);
+    return;
+  }
+  if ((fd = fioOpen(path, FIO_O_WRONLY | FIO_O_CREAT | FIO_O_TRUNC)) < 0)
+    return;
+  for (int offset = 0; offset < DIAG_SCAN_SIZE; offset += DIAG_IMAGE_CHUNK)
+    if (fioWrite(fd, osd + offset, DIAG_IMAGE_CHUNK) != DIAG_IMAGE_CHUNK)
+      break;
+  fioClose(fd);
+}
+
 // Returns the report written on boot, followed by what was appended with liveScanReportAppendV(),
 // which is sent as the games_live_scan = 2 log
 const char *liveScanBootReport(int *length) {
@@ -162,4 +184,6 @@ write:
     return;
   fioWrite(fd, report, reportLen);
   fioClose(fd);
+
+  writeOSDSYSImage(osd);
 }
