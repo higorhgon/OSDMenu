@@ -3,7 +3,7 @@
 // so the patcher hooks the calls to scePadPortOpen() to get the buffer and reads the buttons from it,
 // the same way Open PS2 Loader's IGR does.
 // It also hooks scePadRead() to hide Triangle from OSDSYS while a submenu is shown, since OSDSYS
-// would open the Version screen with it.
+// would open the Version screen with it, and to hide every button while the controller is paused.
 #include "patches_pad.h"
 #include "patches_common.h"
 #include "patterns_pad.h"
@@ -21,6 +21,7 @@ static uint16_t prevButtons = 0;
 
 static int (*scePadRead)(int port, int slot, unsigned char *rdata) = NULL;
 static int hideTriangle = 0;
+static volatile int muteReads = 0;
 // For games_button_debug and the games_live_scan = 2 boot report
 uint32_t padReadAddr = 0;
 uint32_t padPortOpenAddr = 0;
@@ -28,16 +29,31 @@ uint32_t padDmaStrAddr = 0;
 int padReadRedirects = 0;
 volatile uint32_t padReadCalls = 0;
 
-// Buttons are in bytes 2 and 3 of the data (active low), Triangle is bit 4 of byte 3
+// Buttons are in bytes 2 and 3 of the data (active low), Triangle is bit 4 of byte 3, and the analog sticks
+// in bytes 4 to 7 (0x80 at rest)
 static int hookPadRead(int port, int slot, unsigned char *rdata) {
   int ret = scePadRead(port, slot, rdata);
   padReadCalls++;
-  if (hideTriangle && (ret >= 4) && (((uint32_t)rdata & 0x1fffffff) >= 0x100000) && (((uint32_t)rdata & 0x1fffffff) < 0x2000000))
+  if ((ret < 4) || (((uint32_t)rdata & 0x1fffffff) < 0x100000) || (((uint32_t)rdata & 0x1fffffff) >= 0x2000000))
+    return ret;
+  if (muteReads > 0) {
+    // The pad state isn't updated while the controller is paused, so the last one read (like Down held)
+    // would go on repeating: nothing is pressed instead
+    muteReads--;
+    rdata[2] = rdata[3] = 0xff;
+    for (int i = 4; (i < 8) && (i < ret); i++)
+      rdata[i] = 0x80;
+  } else if (hideTriangle)
     rdata[3] |= (PADB_TRIANGLE >> 8);
   return ret;
 }
 
 void padHideTriangle(int hide) { hideTriangle = hide; }
+
+void padMute(int reads) {
+  if (reads > muteReads)
+    muteReads = reads;
+}
 
 // Redirects all J/JAL calls to func and function pointers to it to hook. Returns the number of redirects
 static int redirectCalls(uint8_t *osd, uint32_t func, void *hook) {

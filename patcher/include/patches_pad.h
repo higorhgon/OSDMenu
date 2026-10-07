@@ -26,6 +26,12 @@ uint16_t padBackButtons(void);
 // Hides Triangle from OSDSYS, which would open the Version screen, while hide is set
 void padHideTriangle(int hide);
 
+// Shows OSDSYS no button pressed for the next reads of the controller (OSDSYS reads it about once per frame):
+// called while the controller is paused (the live scan and the covers take the SIO2) and the pad state isn't
+// updated, so a button held when it stopped doesn't go on repeating
+#define PAD_MUTE_READS 8
+void padMute(int reads);
+
 // Addresses of the libpad functions found, 0 if not found, the number of calls to scePadRead() that were
 // redirected and the number of calls to the hook (shown by games_button_debug and the games_live_scan = 2 boot report)
 extern uint32_t padReadAddr;

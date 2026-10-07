@@ -1235,6 +1235,7 @@ static int coverModuleReady(void) {
   if (coverError)
     return 0;
   if (coverModuleFrames) {
+    padMute(PAD_MUTE_READS);
     if (!(coverModuleFrames++ % 15) && (liveScanAddr = locateLiveScan()))
       return 1;
     if (coverModuleFrames > LIVESCAN_START_FRAMES)
@@ -1249,10 +1250,13 @@ static int coverModuleReady(void) {
     coverError = settings.liveScanBoot ? 1 : 2;
     return 0;
   }
+  // OSDSYS stops while the modules are loaded, and the controller with it
+  padMute(PAD_MUTE_READS);
   if (loadLiveScanModules() < 0) {
     coverError = 5;
     return 0;
   }
+  padMute(PAD_MUTE_READS);
   coverModuleFrames = 1;
   return 0;
 }
@@ -1282,6 +1286,8 @@ static void pollCovers(int reopened) {
   }
 
   if (coverPending) {
+    // gamescan.irx holds the SIO2 while it reads the cover, which pauses the controller
+    padMute(PAD_MUTE_READS);
     if (iopRead(LIVESCAN_FIELD(coverDone)) == coverSeq) {
       coverPending = 0;
       coverDoneGame = coverRequested;
@@ -1425,6 +1431,7 @@ static void handleGamesMenuEntry(int pos) {
 static void pollSubmenu(void) {
 #ifdef GAMES_MENU
   if (liveScanActive) {
+    padMute(PAD_MUTE_READS);
     pollLiveScan();
     return;
   }

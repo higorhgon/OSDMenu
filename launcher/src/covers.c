@@ -3,6 +3,7 @@
 #include "covers_raw.h"
 #include "dprintf.h"
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -102,6 +103,51 @@ static void scaleImage(const uint8_t *src, int srcWidth, int srcHeight, uint16_t
 // Images with more pixels than this are skipped, since decoding them takes too long and too much memory
 #define COVER_SOURCE_MAX_PIXELS (1024 * 1024)
 
+// The conversion is shown in a window holding the last COVER_LOG_ROWS lines, under a line with the progress:
+// the debug screen doesn't scroll, it goes back to its first line after its 40th, past the bottom of the TV
+#define COVER_LOG_HEADER_ROW 4 // Below the first rows, which the overscan can hide (see initScreen())
+#define COVER_LOG_FIRST_ROW (COVER_LOG_HEADER_ROW + 2)
+#define COVER_LOG_ROWS 18
+#define COVER_LOG_COLUMNS 76
+static char logLines[COVER_LOG_ROWS][COVER_LOG_COLUMNS + 1];
+static int logCount = 0;
+static char logHeader[COVER_LOG_COLUMNS + 1];
+
+static void logDraw(void) {
+  scr_clearline(COVER_LOG_HEADER_ROW);
+  scr_setXY(0, COVER_LOG_HEADER_ROW);
+  scr_printf(" %s", logHeader);
+  int first = (logCount > COVER_LOG_ROWS) ? logCount - COVER_LOG_ROWS : 0;
+  for (int i = 0; i < COVER_LOG_ROWS; i++) {
+    scr_clearline(COVER_LOG_FIRST_ROW + i);
+    if (first + i < logCount) {
+      scr_setXY(0, COVER_LOG_FIRST_ROW + i);
+      scr_printf(" %s", logLines[(first + i) % COVER_LOG_ROWS]);
+    }
+  }
+}
+
+// Adds a line to the window, or with append adds to its last line, and shows the window
+static void logPrint(int append, const char *format, ...) {
+  if (!append || !logCount)
+    logLines[logCount++ % COVER_LOG_ROWS][0] = '\0';
+  char *line = logLines[(logCount - 1) % COVER_LOG_ROWS];
+  size_t len = strlen(line);
+  va_list args;
+  va_start(args, format);
+  vsnprintf(line + len, sizeof(logLines[0]) - len, format, args);
+  va_end(args);
+  logDraw();
+}
+
+static void logSetHeader(const char *format, ...) {
+  va_list args;
+  va_start(args, format);
+  vsnprintf(logHeader, sizeof(logHeader), format, args);
+  va_end(args);
+  logDraw();
+}
+
 // Milliseconds since the first call, to show how long each step takes
 static uint32_t elapsedMs(void) { return (uint32_t)((uint64_t)clock() * 1000 / CLOCKS_PER_SEC); }
 
@@ -109,7 +155,7 @@ static uint32_t elapsedMs(void) { return (uint32_t)((uint64_t)clock() * 1000 / C
 // Returns 0 on success
 static int convertCover(const char *source, const char *dest, int ico) {
   uint32_t start = elapsedMs();
-  msg("read ");
+  logPrint(1, "read ");
   int size;
   uint8_t *data = readSource(source, &size);
   if (!data)
@@ -120,13 +166,13 @@ static int convertCover(const char *source, const char *dest, int ico) {
     free(data);
     return -6;
   }
-  msg("%dx%d decode ", srcWidth, srcHeight);
+  logPrint(1, "%dx%d decode ", srcWidth, srcHeight);
   uint8_t *image = stbi_load_from_memory(data, size, &srcWidth, &srcHeight, &components, 4);
   free(data);
   if (!image)
     return -2;
 
-  msg("scale ");
+  logPrint(1, "scale ");
   int width = COVER_RAW_ICO_SIZE;
   int height = COVER_RAW_ICO_SIZE;
   if (!ico) {
@@ -159,7 +205,7 @@ static int convertCover(const char *source, const char *dest, int ico) {
   scaleImage(image, srcWidth, srcHeight, (uint16_t *)&raw[COVER_RAW_HEADER_SIZE / 4], width, height, !ico);
   stbi_image_free(image);
 
-  msg("write ");
+  logPrint(1, "write ");
   int res = -4;
   int fd = open(dest, O_WRONLY | O_CREAT | O_TRUNC, 0666);
   if (fd >= 0) {
@@ -168,7 +214,7 @@ static int convertCover(const char *source, const char *dest, int ico) {
   }
   free(raw);
   if (!res)
-    msg("ok %lu ms\n", (unsigned long)(elapsedMs() - start));
+    logPrint(1, "ok %lu ms", (unsigned long)(elapsedMs() - start));
   return res;
 }
 
@@ -260,6 +306,12 @@ void convertGameCovers(const CoverGame *games, int count, int ico) {
   int fileCount = 0;
   uint32_t start = elapsedMs();
 
+  // The window starts on a clear screen (msg() sets the screen up the first time)
+  msg("");
+  scr_clear();
+  logCount = 0;
+  logSetHeader("Converting covers...");
+
   // Games with a cover
   int total = 0;
   for (int pass = 0; pass < 2; pass++) {
@@ -270,14 +322,14 @@ void convertGameCovers(const CoverGame *games, int count, int ico) {
         continue;
       if (strcmp(device, listedDevice)) {
         free(files);
-        msg("Covers: listing %s/ART... ", device);
+        logPrint(0, "Listing %s/ART... ", device);
         fileCount = listArt(device, ico ? "_ICO." : "_COV.", &files);
-        msg("%d images\n", fileCount);
+        logPrint(1, "%d images", fileCount);
         strcpy(listedDevice, device);
         if (pass && fileCount) {
           char dir[32];
           snprintf(dir, sizeof(dir), "%s/" COVER_RAW_DIR, device);
-          msg("Covers: creating %s\n", dir);
+          logPrint(0, "Creating %s", dir);
           mkdir(dir, 0777);
         }
       }
@@ -295,14 +347,15 @@ void convertGameCovers(const CoverGame *games, int count, int ico) {
       // Named after the title ID (the game name without one), converted again only when the source image changes
       char dest[256];
       snprintf(dest, sizeof(dest), "%s/" COVER_RAW_DIR "/%s%s", device, games[i].id[0] ? games[i].id : games[i].name, rawSuffix);
-      msg("[%d/%d] %.40s: ", ++done, total, games[i].name);
+      logSetHeader("Converting covers: %d of %d, %d converted, %d failed", ++done, total, converted, failed);
+      logPrint(0, "[%d/%d] %.40s: ", done, total, games[i].name);
       if (convertedSourceSize(dest) == sourceSize) {
-        msg("up to date\n");
+        logPrint(1, "up to date");
         continue;
       }
       int res = convertCover(source, dest, ico);
       if (res) {
-        msg("failed (%d)\n", res);
+        logPrint(1, "failed (%d)", res);
         failed++;
       } else
         converted++;
@@ -310,5 +363,8 @@ void convertGameCovers(const CoverGame *games, int count, int ico) {
     listedDevice[0] = '\0'; // List again for the second pass
   }
   free(files);
-  msg("Covers: %d found, %d converted, %d failed in %lu s\n", found, converted, failed, (unsigned long)((elapsedMs() - start) / 1000));
+  logSetHeader("Covers: %d found, %d converted, %d failed in %lu s", found, converted, failed,
+               (unsigned long)((elapsedMs() - start) / 1000));
+  // The launcher's next messages go below the window
+  scr_setXY(0, COVER_LOG_FIRST_ROW + COVER_LOG_ROWS + 1);
 }
