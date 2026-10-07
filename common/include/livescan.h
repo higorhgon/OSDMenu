@@ -54,6 +54,7 @@
 #define LIVESCAN_LIST 2     // Only list the threads (threads, threadCount), for the diagnostics log
 #define LIVESCAN_SAVE_FAV 3 // Rewrite the favorites of the cache at cachePath from fav (by cache index)
 #define LIVESCAN_COVER 4    // Read the cover of game coverIndex of the cache at cachePath into the buffer at coverAddr (games_covers)
+#define LIVESCAN_PREPARE 5  // Load mmceman from mmcePath ahead of the first cover (games_covers), the result in result
 
 // stage: what gamescan.irx is doing, shown while scanning
 #define LIVESCAN_STAGE_IDLE 0

@@ -1338,6 +1338,45 @@ static void pollCovers(int reopened) {
   coverFrames = 0;
   coverStatus = COVER_STATUS_REQUESTED;
 }
+
+// Loads gamescan.irx and mmceman as soon as the main menu is shown, while the controller pauses
+// go unnoticed, instead of when a games submenu with covers is first opened.
+// Called once per frame while the main menu is shown and no submenu is open
+#define COVER_PRELOAD_MODULES 1 // Loading gamescan.irx, then waiting for it to start
+#define COVER_PRELOAD_MMCE 2    // Waiting for gamescan.irx to start mmceman
+static int coverPreload = COVER_PRELOAD_MODULES; // 0 once done
+static int coverPreloadFrames = 0;
+static void preloadCovers(void) {
+  if (!coverPreload || liveScanActive || coverPending)
+    return;
+  if ((!settings.gamesUseMMCE && !settings.psxUseMMCE) || coverError) {
+    coverPreload = 0;
+    return;
+  }
+
+  if (coverPreload == COVER_PRELOAD_MODULES) {
+    if (!coverModuleReady())
+      return;
+    // A scan or a cover already loaded it, or is about to
+    if (iopRead(LIVESCAN_FIELD(mmceLoaded)) || iopRead(LIVESCAN_FIELD(request))) {
+      coverPreload = 0;
+      return;
+    }
+    char mmcePath[] = LIVESCAN_IRX_MMCEMAN;
+    mmcePath[2] = (settings.mcSlot == 1) ? '1' : '0';
+    iopWriteString(LIVESCAN_FIELD(mmcePath), mmcePath, LIVESCAN_PATH_LEN);
+    iopWrite(LIVESCAN_FIELD(status), LIVESCAN_STATUS_IDLE);
+    iopWrite(LIVESCAN_FIELD(request), LIVESCAN_PREPARE);
+    coverPreload = COVER_PRELOAD_MMCE;
+    coverPreloadFrames = 0;
+  }
+
+  // gamescan.irx holds the SIO2 while it starts mmceman, which pauses the controller
+  padMute(PAD_MUTE_READS);
+  if (iopRead(LIVESCAN_FIELD(mmceLoaded)) || (++coverPreloadFrames > COVER_TIMEOUT_FRAMES) ||
+      (!iopRead(LIVESCAN_FIELD(request)) && (iopRead(LIVESCAN_FIELD(status)) == LIVESCAN_STATUS_DONE)))
+    coverPreload = 0;
+}
 #endif
 #endif
 
@@ -1435,6 +1474,10 @@ static void pollSubmenu(void) {
     pollLiveScan();
     return;
   }
+#endif
+#ifdef LIVESCAN
+  if (settings.gamesCovers && !activeMenu)
+    preloadCovers();
 #endif
   // OSDSYS would open the Version screen with Triangle
   padHideTriangle(activeMenu || activeGroup);

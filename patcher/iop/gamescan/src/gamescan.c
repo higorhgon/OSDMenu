@@ -870,6 +870,21 @@ out:
   shared.coverDone = shared.coverSeq;
 }
 
+// Loads mmceman ahead of the first cover, so the controller pauses while the main menu is shown (games_covers)
+static void prepareMMCE(void) {
+  int res = 0;
+  if (shared.mmceLoaded)
+    goto out;
+  if ((res = findSIO2Lock()) || (res = readMMCE()))
+    goto out;
+  lockSIO2();
+  res = startMMCE();
+
+out:
+  unlockSIO2();
+  shared.result = res;
+}
+
 static unsigned int bcdToInt(unsigned char bcd) { return ((bcd >> 4) * 10 + (bcd & 0xf)) % 100; }
 
 // Writes the log chunk in logBuffer, creating the file named after the console clock with the first one
@@ -928,6 +943,8 @@ static void scanThread(void *arg) {
         shared.result = saveFavorites();
       else if (request == LIVESCAN_COVER)
         readCover();
+      else if (request == LIVESCAN_PREPARE)
+        prepareMMCE();
       else
         doScan();
       shared.status = LIVESCAN_STATUS_DONE;
