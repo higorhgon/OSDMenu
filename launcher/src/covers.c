@@ -35,7 +35,8 @@
 
 #define COVER_SOURCE_MAX_SIZE (4 * 1024 * 1024)
 
-// Returns the source size recorded in the converted cover at path, or -1 if it's missing or invalid
+// Returns the source size recorded in the converted cover at path, or -1 if it's missing, invalid or
+// converted by another version
 static int convertedSourceSize(const char *path) {
   uint32_t header[COVER_RAW_HEADER_SIZE / 4];
   int fd = open(path, O_RDONLY);
@@ -43,7 +44,7 @@ static int convertedSourceSize(const char *path) {
     return -1;
   int res = read(fd, header, sizeof(header));
   close(fd);
-  if ((res != sizeof(header)) || (header[COVER_RAW_WORD_MAGIC] != COVER_RAW_MAGIC))
+  if ((res != sizeof(header)) || (header[COVER_RAW_WORD_MAGIC] != COVER_RAW_MAGIC) || (header[COVER_RAW_WORD_VERSION] != COVER_RAW_VERSION))
     return -1;
   return header[COVER_RAW_WORD_SOURCE];
 }
@@ -126,8 +127,24 @@ static int convertCover(const char *source, const char *dest, int ico) {
     return -2;
 
   msg("scale ");
-  int width = ico ? COVER_RAW_ICO_SIZE : COVER_RAW_WIDTH;
-  int height = ico ? COVER_RAW_ICO_SIZE : COVER_RAW_COV_HEIGHT;
+  int width = COVER_RAW_ICO_SIZE;
+  int height = COVER_RAW_ICO_SIZE;
+  if (!ico) {
+    // The cover's own proportions, as large as fits: a PS2 case fills the height, a PS1 one the width
+    if ((uint64_t)srcHeight * COVER_RAW_WIDTH <= (uint64_t)srcWidth * COVER_RAW_COV_HEIGHT) {
+      width = COVER_RAW_WIDTH;
+      height = (srcHeight * COVER_RAW_WIDTH + srcWidth / 2) / srcWidth;
+    } else {
+      height = COVER_RAW_COV_HEIGHT;
+      width = (srcWidth * COVER_RAW_COV_HEIGHT + srcHeight / 2) / srcHeight;
+    }
+    // The patcher reads two pixels at a time
+    width &= ~1;
+    if (width < 2)
+      width = 2;
+    if (height < 1)
+      height = 1;
+  }
   int rawSize = COVER_RAW_HEADER_SIZE + width * height * 2;
   uint32_t *raw = malloc(rawSize);
   if (!raw) {
@@ -138,6 +155,7 @@ static int convertCover(const char *source, const char *dest, int ico) {
   raw[COVER_RAW_WORD_MAGIC] = COVER_RAW_MAGIC;
   raw[COVER_RAW_WORD_SIZE] = width | (height << 16);
   raw[COVER_RAW_WORD_SOURCE] = size;
+  raw[COVER_RAW_WORD_VERSION] = COVER_RAW_VERSION;
   scaleImage(image, srcWidth, srcHeight, (uint16_t *)&raw[COVER_RAW_HEADER_SIZE / 4], width, height, !ico);
   stbi_image_free(image);
 

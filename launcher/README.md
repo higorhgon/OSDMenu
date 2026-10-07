@@ -133,9 +133,11 @@ draws the one of the selected game (see the patcher's README), in the Games and 
 image) instead of `_COV` with `games_cover_type = ico`. The title ID of a PS1 game is read from `SYSTEM.CNF` in the first
 track of its CUE sheet (`BOOT = cdrom:\SCUS_949.00;1`), like the ISO's for PS2 games, and kept by the live scan.
 [osdhub-manager](https://github.com/higorhgon/osdhub-manager) downloads the ART images by title ID from a computer.
-Each one is scaled to 128x180 (72x72 for discs, the size of OSD-XMB's game icons), converted to 16-bit color and written
+Each one is scaled to fit in 128x180 keeping its proportions (128x180 for a PS2 case, about 128x128 for a PS1 one;
+72x72 for discs, the size of OSD-XMB's game icons), converted to 16-bit color and written
 to `<device>:/ART/OSDHUB/<title ID>_COV.RAW` (`_ICO.RAW`; the game name for games without a title ID), and only
-converted again when the image changes.
+converted again when the image changes (or when the conversion does: the covers converted before it kept their
+proportions are converted again on the next "Refresh list").
 JPEG and PNG are decoded with [stb_image](https://github.com/nothings/stb) (public domain).
 
 Selecting a game launches `games_neutrino_path` the same way [NHDDL](https://github.com/pcm720/nhddl) does:

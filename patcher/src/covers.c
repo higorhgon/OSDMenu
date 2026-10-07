@@ -110,13 +110,14 @@ void coversInit(uint32_t drawIcon) {
 #define COVER_TEX_HEIGHT (1 << COVER_TEX_HEIGHT_LOG2)
 #define COVER_TEX_ADDR (0x100000 - COVER_TEX_WIDTH * COVER_TEX_HEIGHT)
 
-// Screen position: COVER_SCREEN_WIDTH wide, with the height that keeps the aspect ratio on a 4:3 TV
-// (an OSDSYS line is two TV lines, and 640 pixels are about 7/15 as wide as 224 lines are tall),
+// Screen position: a COVER_RAW_WIDTH-wide cover is COVER_SCREEN_WIDTH wide, with the height that keeps the aspect
+// ratio on a 4:3 TV (an OSDSYS line is two TV lines, and 640 pixels are about 7/15 as wide as 224 lines are tall),
 // centered vertically on the menu
 #define COVER_X 40
 #define COVER_SCREEN_WIDTH 120
 #define COVER_SCREEN_HEIGHT(width, height) (COVER_SCREEN_WIDTH * (height) * 7 / ((width) * 15))
-#define COVER_PANEL_BORDER 6
+// Room between the cover and the menu's names
+#define COVER_MARGIN 6
 
 static int coverWidth = 0; // Size of the cover in the texture, 0 when there's none
 static int coverHeight = 0;
@@ -171,19 +172,14 @@ void coversDraw(int alpha) {
   if (!coversReady || !coverVisible)
     return;
 
-  // Square images are discs, drawn unscaled without the panel like OSD-XMB's game icons,
-  // and covers are drawn COVER_SCREEN_WIDTH wide in a dark panel
-  int disc = (coverWidth == coverHeight);
-  int width = disc ? coverWidth : COVER_SCREEN_WIDTH;
-  int height = COVER_SCREEN_HEIGHT(coverWidth, coverHeight) * width / COVER_SCREEN_WIDTH;
+  // Discs (games_cover_type = ico) are drawn unscaled like OSD-XMB's game icons, and covers at the same scale
+  // whatever their size, so they keep their proportions: a PS2 case is COVER_SCREEN_WIDTH wide and a PS1 one
+  // as wide but shorter. Both are centered where a case cover goes
+  int width = settings.gamesCoverIco ? coverWidth : COVER_SCREEN_WIDTH * coverWidth / COVER_RAW_WIDTH;
+  int height = settings.gamesCoverIco ? COVER_SCREEN_HEIGHT(coverWidth, coverHeight) * coverWidth / COVER_SCREEN_WIDTH
+                                      : COVER_SCREEN_HEIGHT(COVER_RAW_WIDTH, coverHeight);
   int x = COVER_X + (COVER_SCREEN_WIDTH - width) / 2;
   int y = settings.menuY - height / 2;
-  if (!disc) {
-    OSDSprite panel = {0x10, 0x10, 0x18, alpha * 3 / 4};
-    setRect(&panel, x - COVER_PANEL_BORDER, y - COVER_PANEL_BORDER / 2, x + width + COVER_PANEL_BORDER, y + height + COVER_PANEL_BORDER / 2);
-    panel.abe = 1;
-    spriteSubmit(&panel);
-  }
 
   // The cover, with texture coordinates offset by half a texel like DrawIcon()
   OSDSprite cover = {0x80, 0x80, 0x80, alpha};
@@ -207,8 +203,8 @@ void coversInitText(uint32_t drawMenuItem) {
 
 const char *coversFitText(const char *string) {
   static char fitted[NAME_LEN];
-  // The menu is centered on menuX, between the panel and the right edge of the screen
-  int room = settings.menuX - (COVER_X + COVER_SCREEN_WIDTH + COVER_PANEL_BORDER + 8);
+  // The menu is centered on menuX, between the cover and the right edge of the screen
+  int room = settings.menuX - (COVER_X + COVER_SCREEN_WIDTH + COVER_MARGIN + 8);
   if (640 - 8 - settings.menuX < room)
     room = 640 - 8 - settings.menuX;
   room *= 2;

@@ -156,9 +156,10 @@ only the texts are shown. `games_button_debug = 1` shows the icon types in a lin
 `v` (Version), `b` (Back), `s` (Sort) and `seen` (icons seen in other screens such as System Configuration, which shows
 Circle and Square).
 
-`games_covers = 1` (default `0`, MMCE games only) shows the cover of the selected game in a panel to the left of the
-Games and PSX submenus (the disc image without the panel, at the size of OSD-XMB's game icons), centered on `OSDSYS_menu_y`; move the menu to the right with `OSDSYS_menu_x` (names that don't fit
-between the panel and the edge of the screen are shortened with "..."). The launcher converts OPL's ART images when the
+`games_covers = 1` (default `0`, MMCE games only) shows the cover of the selected game to the left of the
+Games and PSX submenus with its own proportions (a PS1 case is as wide as a PS2 one but shorter; the disc image at the size
+of OSD-XMB's game icons), centered on `OSDSYS_menu_y`; move the menu to the right with `OSDSYS_menu_x` (names that don't fit
+between the cover and the edge of the screen are shortened with "..."). The launcher converts OPL's ART images when the
 list is refreshed (see the launcher's README), and `games_cover_type = ico` shows the disc image instead of the case cover.
 Once the cursor stays on a game for about 0.3 seconds, `gamescan.irx` (loaded from the memory card like for
 `games_live_scan`, which is why both need the modules the patcher writes to `mc?:/SYS-CONF/`) reads its converted cover,
