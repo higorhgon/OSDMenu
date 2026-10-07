@@ -22,8 +22,8 @@ void coversClear(void);
 void coversShow(void);
 
 // Draws the cover; called from the button panel, once per frame while the Games submenu is shown,
-// with the button panel's alpha (0-0x80, it fades in)
-void coversDraw(int alpha);
+// with the button panel's alpha (0-0x80, it fades in), as a disc (games_cover_type = ico) or a case cover
+void coversDraw(int alpha, int disc);
 
 // Returns string, or a copy shortened with "..." so that it fits between the cover and the right edge of the screen
 const char *coversFitText(const char *string);

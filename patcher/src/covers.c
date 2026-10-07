@@ -168,16 +168,16 @@ static void setRect(OSDSprite *sprite, int x0, int y0, int x1, int y1) {
   sprite->y1 = y1 << 4;
 }
 
-void coversDraw(int alpha) {
+void coversDraw(int alpha, int disc) {
   if (!coversReady || !coverVisible)
     return;
 
-  // Discs (games_cover_type = ico) are drawn unscaled like OSD-XMB's game icons, and covers at the same scale
+  // Discs (disc, from games_cover_type = ico) are drawn unscaled like OSD-XMB's game icons, and covers at the same scale
   // whatever their size, so they keep their proportions: a PS2 case is COVER_SCREEN_WIDTH wide and a PS1 one
   // as wide but shorter. Both are centered where a case cover goes
-  int width = settings.gamesCoverIco ? coverWidth : COVER_SCREEN_WIDTH * coverWidth / COVER_RAW_WIDTH;
-  int height = settings.gamesCoverIco ? COVER_SCREEN_HEIGHT(coverWidth, coverHeight) * coverWidth / COVER_SCREEN_WIDTH
-                                      : COVER_SCREEN_HEIGHT(COVER_RAW_WIDTH, coverHeight);
+  int width = disc ? coverWidth : COVER_SCREEN_WIDTH * coverWidth / COVER_RAW_WIDTH;
+  int height = disc ? COVER_SCREEN_HEIGHT(coverWidth, coverHeight) * coverWidth / COVER_SCREEN_WIDTH
+                    : COVER_SCREEN_HEIGHT(COVER_RAW_WIDTH, coverHeight);
   int x = COVER_X + (COVER_SCREEN_WIDTH - width) / 2;
   int y = settings.menuY - height / 2;
 

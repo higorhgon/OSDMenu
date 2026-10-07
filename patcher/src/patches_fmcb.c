@@ -1938,7 +1938,7 @@ void drawIconLeft(int type, int X, int Y, int alpha) {
     static GamesSubmenu *coversMenu = NULL;
     if (settings.gamesCovers && showSubmenuPrompts() && activeMenu) {
       pollCovers(coversMenu != activeMenu);
-      coversDraw(alpha);
+      coversDraw(alpha, settings.gamesCoverIco);
       coversMenu = activeMenu;
     } else
       coversMenu = NULL;
