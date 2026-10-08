@@ -163,12 +163,21 @@ static void showGamesEntries(GamesSubmenu *menu) {
   menuInfo->currentEntry = 3; // First game, or "Refresh list" when there are none
 }
 
+#ifdef LIVESCAN
+static void startCoversLoading(GamesSubmenu *menu);
+static void pollCoversLoading(void);
+static int coversLoading;
+#endif
+
 // Replaces the custom entries with the submenu
 static void openGamesMenu(GamesSubmenu *menu) {
   gamesMenuReturnEntry = menuInfo->currentEntry;
   sortGames(menu);
   showGamesEntries(menu);
   activeMenu = menu;
+#ifdef LIVESCAN
+  startCoversLoading(menu);
+#endif
 }
 
 // Returns the cache index of the game under the cursor in the active submenu, or -1
@@ -1104,6 +1113,12 @@ static int startLiveScan(GamesSubmenu *menu) {
 
 // Called once per frame while the live scan is running
 static void pollLiveScan(void) {
+#ifdef LIVESCAN
+  if (coversLoading) {
+    pollCoversLoading();
+    return;
+  }
+#endif
   if (liveScanLogging) {
     pollLiveScanLog();
     return;
@@ -1398,46 +1413,82 @@ static void pollCovers(int reopened) {
   coverStatus = COVER_STATUS_REQUESTED;
 }
 
-// Loads gamescan.irx (in the background) and mmceman as soon as the main menu is shown, instead of when a games
-// submenu with covers is first opened. Starting mmceman pauses the controller for a moment (coverPrepareFrames).
-// Called once per frame while the main menu is shown and no submenu is open
-#define COVER_PRELOAD_MODULES 1 // Loading gamescan.irx, then waiting for it to start
-#define COVER_PRELOAD_MMCE 2    // Waiting for gamescan.irx to start mmceman
-static int coverPreload = COVER_PRELOAD_MODULES; // 0 once done
-static int coverPreloadFrames = 0;
+// Gets gamescan.irx and mmceman ready for the covers. Returns 1 once they are (or can't be), 0 meanwhile.
+// gamescan.irx is loaded in the background as soon as the main menu is shown, but mmceman is only started
+// (startMMCE) behind "Loading covers..." when a games submenu is first opened, since that pauses the controller
+#define COVER_PREPARE_MODULES 1 // Loading gamescan.irx, then waiting for it to start
+#define COVER_PREPARE_MMCE 2    // Waiting for gamescan.irx to start mmceman
+#define COVER_PREPARE_DONE 3
+static int coverPrepare = COVER_PREPARE_MODULES;
+static int coverPrepareWait = 0;
 static int coverPrepareFrames = -1; // Frames gamescan.irx took to start mmceman, for games_button_debug
-static void preloadCovers(void) {
-  if (!coverPreload || liveScanActive || coverPending)
-    return;
-  if ((!settings.gamesUseMMCE && !settings.psxUseMMCE) || coverError) {
-    coverPreload = 0;
-    return;
-  }
+static int prepareCovers(int startMMCE) {
+  if ((coverPrepare == COVER_PREPARE_DONE) || coverError || (!settings.gamesUseMMCE && !settings.psxUseMMCE))
+    return 1;
 
-  if (coverPreload == COVER_PRELOAD_MODULES) {
+  if (coverPrepare == COVER_PREPARE_MODULES) {
     if (!coverModuleReady())
-      return;
-    // A scan or a cover already loaded it, or is about to
-    if (iopRead(LIVESCAN_FIELD(mmceLoaded)) || iopRead(LIVESCAN_FIELD(request))) {
-      coverPreload = 0;
-      return;
+      return coverError != 0;
+    // A scan or a cover loaded it already
+    if (iopRead(LIVESCAN_FIELD(mmceLoaded))) {
+      coverPrepare = COVER_PREPARE_DONE;
+      return 1;
     }
+    // Not yet, or wait for gamescan.irx to finish saving the favorites
+    if (!startMMCE || iopRead(LIVESCAN_FIELD(request)) || (iopRead(LIVESCAN_FIELD(status)) == LIVESCAN_STATUS_BUSY))
+      return 0;
     char mmcePath[] = LIVESCAN_IRX_MMCEMAN;
     mmcePath[2] = (settings.mcSlot == 1) ? '1' : '0';
     iopWriteString(LIVESCAN_FIELD(mmcePath), mmcePath, LIVESCAN_PATH_LEN);
     iopWrite(LIVESCAN_FIELD(status), LIVESCAN_STATUS_IDLE);
     iopWrite(LIVESCAN_FIELD(request), LIVESCAN_PREPARE);
-    coverPreload = COVER_PRELOAD_MMCE;
-    coverPreloadFrames = 0;
+    coverPrepare = COVER_PREPARE_MMCE;
+    coverPrepareWait = 0;
   }
 
   // gamescan.irx holds the SIO2 while it starts mmceman, which pauses the controller
   padMute(PAD_MUTE_READS);
-  if (iopRead(LIVESCAN_FIELD(mmceLoaded)) || (++coverPreloadFrames > COVER_TIMEOUT_FRAMES) ||
+  if (iopRead(LIVESCAN_FIELD(mmceLoaded)) || (++coverPrepareWait > COVER_TIMEOUT_FRAMES) ||
       (!iopRead(LIVESCAN_FIELD(request)) && (iopRead(LIVESCAN_FIELD(status)) == LIVESCAN_STATUS_DONE))) {
-    coverPreload = 0;
-    coverPrepareFrames = coverPreloadFrames;
+    coverPrepare = COVER_PREPARE_DONE;
+    coverPrepareFrames = coverPrepareWait;
+    return 1;
   }
+  return 0;
+}
+
+// While a games submenu shows only "Loading covers..." (as liveScanActive), the "Refresh list" label it replaced
+static int coversLoading = 0;
+static char coversLoadingLabel[NAME_LEN];
+#define COVERS_LOADING_FRAMES (60 * 15)
+static int coversLoadingFrames = 0;
+
+// Shows only "Loading covers..." in the submenu just opened until the covers can be read
+static void startCoversLoading(GamesSubmenu *menu) {
+  if (!settings.gamesCovers || !liveScanUsesMMCE(menu) || !menu->count || prepareCovers(0))
+    return;
+  int slot = menu->base + menu->count + 1;
+  strcpy(coversLoadingLabel, settings.menuItemName[slot]);
+  strcpy(settings.menuItemName[slot], "Loading covers...");
+  setMenuEntry(0, slot);
+  menuInfo->entryCount = 3;
+  menuInfo->currentEntry = 2;
+  liveScanActive = 1;
+  coversLoading = 1;
+  coversLoadingFrames = 0;
+}
+
+// Called once per frame while "Loading covers..." is shown. The games are shown without covers
+// if they aren't ready after COVERS_LOADING_FRAMES
+static void pollCoversLoading(void) {
+  if (++coversLoadingFrames > COVERS_LOADING_FRAMES)
+    coverError = 6;
+  if (!prepareCovers(1))
+    return;
+  coversLoading = 0;
+  liveScanActive = 0;
+  strcpy(settings.menuItemName[activeMenu->base + activeMenu->count + 1], coversLoadingLabel);
+  showGamesEntries(activeMenu);
 }
 #endif
 #endif
@@ -1528,8 +1579,26 @@ static void handleGamesMenuEntry(int pos) {
 #endif
 
 #ifndef HOSD
+// "Browser" and "System Configuration" (the first two entries) aren't shown in the submenus
+#define HIDDEN_ENTRIES 2
+static int hidesEntry(int num) { return (activeMenu || activeGroup) && (num / 8 < HIDDEN_ENTRIES); }
+// Moves the old style menu up by half the height of the hidden entries (rows 20 apart), keeping it centered
+static int hiddenEntriesShift(void) { return (activeMenu || activeGroup) ? HIDDEN_ENTRIES * 10 : 0; }
+
+// Keeps the cursor off the hidden entries: moving up from the first entry goes to the last one,
+// and moving down from the last one (which OSDSYS wraps to "Browser") goes back to the first
+static uint32_t lastSubmenuEntry = 0;
+static void skipHiddenEntries(void) {
+  if (!(activeMenu || activeGroup))
+    return;
+  if (menuInfo->currentEntry < HIDDEN_ENTRIES)
+    menuInfo->currentEntry = (lastSubmenuEntry == HIDDEN_ENTRIES) ? menuInfo->entryCount - 1 : HIDDEN_ENTRIES;
+  lastSubmenuEntry = menuInfo->currentEntry;
+}
+
 // Called once per frame: polls the live scan, or the buttons of the games submenu or menu group
 static void pollSubmenu(void) {
+  skipHiddenEntries();
 #ifdef GAMES_MENU
   if (liveScanActive) {
     padMute(PAD_MUTE_READS);
@@ -1539,7 +1608,7 @@ static void pollSubmenu(void) {
 #endif
 #ifdef LIVESCAN
   if (settings.gamesCovers && !activeMenu)
-    preloadCovers();
+    prepareCovers(0);
 #endif
   // OSDSYS would open the Version screen with Triangle
   padHideTriangle(activeMenu || activeGroup);
@@ -1708,6 +1777,11 @@ static int vel, acc;
 static int offsY = 0;
 static int fontHeight = 16;
 
+#ifdef HOSD
+#define hidesEntry(num) 0
+#define hiddenEntriesShift() 0
+#endif
+
 // Draws selected items
 void drawMenuItemSelected(int X, int Y, uint32_t *color, int alpha, const char *string, int num) {
 #ifndef HOSD
@@ -1736,7 +1810,8 @@ void drawMenuItemSelected(int X, int Y, uint32_t *color, int alpha, const char *
     alpha = 0x80;
 
   if (!(settings.patcherFlags & FLAG_SCROLL_MENU)) { // Old style menu
-    DrawMenuItem(settings.menuX, Y - customItemCount() * 10, colorSelected, alpha, string);
+    if (!hidesEntry(num))
+      DrawMenuItem(settings.menuX, Y - customItemCount() * 10 - hiddenEntriesShift(), colorSelected, alpha, string);
   } else { // New style menu
     if (num == 0) {
       int amount;
@@ -1749,7 +1824,8 @@ void drawMenuItemSelected(int X, int Y, uint32_t *color, int alpha, const char *
       }
     }
     Y = (num << 1) - offsY;
-    if ((Y < ((settings.displayedItems + 1) * (fontHeight / 2))) && (Y > -((settings.displayedItems + 1) * (fontHeight / 2)))) {
+    if (!hidesEntry(num) && (Y < ((settings.displayedItems + 1) * (fontHeight / 2))) &&
+        (Y > -((settings.displayedItems + 1) * (fontHeight / 2)))) {
       vel -= acc;
       if (vel < -settings.cursorMaxVelocity || vel > settings.cursorMaxVelocity)
         acc = -acc;
@@ -1790,7 +1866,8 @@ void drawMenuItemUnselected(int X, int Y, uint32_t *color, int alpha, const char
     colorUnselected[i] = settings.colorUnselected[i];
 
   if (!(settings.patcherFlags & FLAG_SCROLL_MENU)) { // Old style menu
-    DrawMenuItem(settings.menuX, Y - customItemCount() * 10, colorUnselected, alpha, string);
+    if (!hidesEntry(num))
+      DrawMenuItem(settings.menuX, Y - customItemCount() * 10 - hiddenEntriesShift(), colorUnselected, alpha, string);
   } else { // New style menu
     if (num == 0) {
       int amount, destY = menuInfo->currentEntry << 4;
@@ -1803,7 +1880,8 @@ void drawMenuItemUnselected(int X, int Y, uint32_t *color, int alpha, const char
       }
     }
     Y = (num << 1) - offsY;
-    if ((Y < ((settings.displayedItems + 1) * (fontHeight / 2))) && (Y > -((settings.displayedItems + 1) * (fontHeight / 2)))) {
+    if (!hidesEntry(num) && (Y < ((settings.displayedItems + 1) * (fontHeight / 2))) &&
+        (Y > -((settings.displayedItems + 1) * (fontHeight / 2)))) {
       if (Y < 0)
         alpha = 128 + (Y * (128 / ((settings.displayedItems + 1) * (fontHeight / 2))));
       else
@@ -2008,7 +2086,7 @@ void drawNonselectableEntryRight(int X, int Y, uint32_t *color, int alpha, const
         if (settings.gamesCovers) {
           // "cov<1 when ready> e<module error> g<game whose cover was read> st<COVER_STATUS_*> r<bytes read or error>
           // h<first word of the cover> q<request sequence>/<done> m<gamescan.irx found> ld<iomanX ms>/<gamescan ms>
-          // p<frames mmceman took to start at boot>"
+          // p<frames mmceman took to start>"
           snprintf(debug, sizeof(debug), "cov%d e%d g%d st%d r%ld h%lx q%lu/%lu m%d ld%lu/%lu p%d", coversReady, coverError, coverDoneGame,
                    coverStatus, liveScanAddr ? (long)iopRead(LIVESCAN_FIELD(coverResult)) : 0, coverHeader, coverSeq,
                    liveScanAddr ? iopRead(LIVESCAN_FIELD(coverDone)) : 0, liveScanAddr != 0, liveScanLoadMs[0], liveScanLoadMs[1],

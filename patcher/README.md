@@ -167,8 +167,9 @@ named after the title ID it finds in the games cache, from the game's own MMCE d
 (games without a cover aren't asked for again until the submenu is reopened), pausing the controller for that moment, and it's drawn with
 OSDSYS's own sprite and texture functions, found from the function that draws the button icons, from a texture at the
 end of the video memory. The modules are loaded as soon as the main menu is first shown, by a thread with a lower
-priority than OSDSYS's, so the menu keeps moving and responding meanwhile; `mmceman` is started right after, which
-pauses the controller for a moment (`gamescan.irx` holds the SIO2 while it starts).
+priority than OSDSYS's, so the menu keeps moving and responding meanwhile. `mmceman` is started when a Games or PSX
+submenu is first opened, which pauses the controller for a moment (`gamescan.irx` holds the SIO2 while it starts),
+so the submenu only shows "Loading covers..." until then (up to 15 seconds, after which the games are shown without covers).
 While the controller is paused, OSDSYS is told no button is pressed (and for a few reads after), so the last button
 read before the pause isn't repeated.
 With `games_button_debug = 1`, a second line shows `cov<1 when the functions were found>`, `e<module error>`,
@@ -229,6 +230,8 @@ path1_OSDSYS_ITEM_10 = mc?:/BOOT/DKWDRV.ELF
 group_OSDSYS_ITEM_10 = Apps
 ```
 Each group is shown as a `<group> >` entry that opens a submenu with "< Back" and its entries in `OSDMENU.CNF` order.
+"Browser" and "System Configuration" aren't shown in the submenus (games or groups): moving up from "< Back" goes to
+the last entry, and moving down from the last entry goes back to "< Back".
 The groups are listed in alphabetical order after "Games >" and "PSX >", followed by the entries without a group.
 Circle goes back and Left/Right move a page. Up to 32 groups are supported.
 Group names can contain spaces, and are case-sensitive (`Apps` and `apps` are different groups).
