@@ -1457,9 +1457,8 @@ static int prepareCovers(int startMMCE) {
   return 0;
 }
 
-// While a games submenu shows only "Loading covers..." (as liveScanActive), the "Refresh list" label it replaced
+// Set while a games submenu shows only "Loading covers..." (as liveScanActive)
 static int coversLoading = 0;
-static char coversLoadingLabel[NAME_LEN];
 #define COVERS_LOADING_FRAMES (60 * 15)
 static int coversLoadingFrames = 0;
 
@@ -1467,8 +1466,8 @@ static int coversLoadingFrames = 0;
 static void startCoversLoading(GamesSubmenu *menu) {
   if (!settings.gamesCovers || !liveScanUsesMMCE(menu) || !menu->count || prepareCovers(0))
     return;
-  int slot = menu->base + menu->count + 1;
-  strcpy(coversLoadingLabel, settings.menuItemName[slot]);
+  // In the "< Back" label, which showGamesEntries() writes again
+  int slot = menu->base + menu->count;
   strcpy(settings.menuItemName[slot], "Loading covers...");
   setMenuEntry(0, slot);
   menuInfo->entryCount = 3;
@@ -1487,7 +1486,6 @@ static void pollCoversLoading(void) {
     return;
   coversLoading = 0;
   liveScanActive = 0;
-  strcpy(settings.menuItemName[activeMenu->base + activeMenu->count + 1], coversLoadingLabel);
   showGamesEntries(activeMenu);
 }
 #endif

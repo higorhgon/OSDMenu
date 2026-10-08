@@ -14,7 +14,7 @@
 
 #define DIAG_SCAN_SIZE 0x100000
 
-static char report[16 * 1024] __attribute__((aligned(16))); // The end of a long live scan log is cut
+static char report[15 * 1024] __attribute__((aligned(16))); // The end of a long live scan log is cut
 static int reportLen = 0;
 
 // The report is only written with games_live_scan = 2, so otherwise its buffer is lent
