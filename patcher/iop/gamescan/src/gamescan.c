@@ -695,10 +695,24 @@ static void listThreads(void) {
 // mmceman
 //
 
+// Milliseconds since start
+static unsigned int msSince(const iop_sys_clock_t *start) {
+  iop_sys_clock_t now, diff;
+  GetSystemTime(&now);
+  unsigned long long ticks = (((unsigned long long)now.hi << 32) | now.lo) - (((unsigned long long)start->hi << 32) | start->lo);
+  diff.lo = (unsigned int)ticks;
+  diff.hi = (unsigned int)(ticks >> 32);
+  u32 sec, usec;
+  SysClock2USec(&diff, &sec, &usec);
+  return sec * 1000 + usec / 1000;
+}
+
 // Reads mmceman from the memory card into IOP RAM
 static int readMMCE(void) {
-  if (mmceBuffer)
+  if (mmceBuffer || shared.mmceLoaded)
     return 0;
+  iop_sys_clock_t start;
+  GetSystemTime(&start);
 
   int fd = iomanX_open(shared.mmcePath, FIO_O_RDONLY);
   if (fd < 0)
@@ -724,12 +738,15 @@ static int readMMCE(void) {
 
 out:
   iomanX_close(fd);
+  shared.mmceReadMs = msSince(&start);
   return res;
 }
 
 // Loads and starts mmceman from IOP RAM. Must be called with the SIO2 locked,
 // since mmceman looks for the MMCE devices when it starts
 static int startMMCE(void) {
+  iop_sys_clock_t start;
+  GetSystemTime(&start);
   int id = LoadModuleBuffer(mmceBuffer);
   FreeSysMemory(mmceBuffer); // LoadModuleBuffer() copies the module
   mmceBuffer = NULL;
@@ -738,6 +755,7 @@ static int startMMCE(void) {
 
   int ret = 1;
   int res = StartModule(id, "mmceman", 0, NULL, &ret);
+  shared.mmceStartMs = msSince(&start);
   if ((res < 0) || ((ret & 3) == MODULE_NO_RESIDENT_END))
     return LIVESCAN_ERR_MMCE_START;
   shared.mmceLoaded = id;
@@ -972,6 +990,8 @@ static void scanThread(void *arg) {
         readCover();
       else if (request == LIVESCAN_PREPARE)
         prepareMMCE();
+      else if (request == LIVESCAN_READ_MMCE)
+        shared.result = readMMCE();
       else
         doScan();
       shared.status = LIVESCAN_STATUS_DONE;

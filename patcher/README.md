@@ -167,7 +167,8 @@ named after the title ID it finds in the games cache, from the game's own MMCE d
 (games without a cover aren't asked for again until the submenu is reopened), and it's drawn with
 OSDSYS's own sprite and texture functions, found from the function that draws the button icons, from a texture at the
 end of the video memory. The modules are loaded as soon as the main menu is first shown, by a thread with a lower
-priority than OSDSYS's, so the menu keeps moving and responding meanwhile. `mmceman` is started when a Games or PSX
+priority than OSDSYS's, so the menu keeps moving and responding meanwhile, and `mmceman` is read into IOP RAM right
+after. It's started when a Games or PSX
 submenu is first opened, which pauses the controller for a moment (`gamescan.irx` holds the SIO2 while it starts),
 so the submenu only shows "Initializing..." until then (up to 15 seconds, after which the games are shown without covers).
 Each cover is read in 4 KB chunks, handing the SIO2 back to the controller in between, and the read stops when the
@@ -176,7 +177,8 @@ While the controller is paused, OSDSYS is told no button is pressed (and for a f
 read before the pause isn't repeated.
 With `games_button_debug = 1`, two more lines show `e<module error>`, `st<cover status>`, `r<bytes read, or error>`,
 `g<game whose cover was read>` and `h<first word of the cover>`, then `ld<iomanX ms>/<gamescan.irx ms>` (module load
-times), `p<frames mmceman took to start>`, `m<1 when gamescan.irx was found>`, `c<1 when the drawing functions were found>`
+times), `p<frames mmceman took to start>`, `mm<ms reading mmceman>/<ms starting it>` (timed by `gamescan.irx`),
+`m<1 when gamescan.irx was found>`, `c<1 when the drawing functions were found>`
 and `q<cover request>/<done>`.
 
 These options are also read by the **launcher**:

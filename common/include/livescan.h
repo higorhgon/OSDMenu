@@ -57,6 +57,7 @@
 #define LIVESCAN_SAVE_FAV 3 // Rewrite the favorites of the cache at cachePath from fav (by cache index)
 #define LIVESCAN_COVER 4    // Read the cover of game coverIndex of the cache at cachePath into the buffer at coverAddr (games_covers)
 #define LIVESCAN_PREPARE 5  // Load mmceman from mmcePath ahead of the first cover (games_covers), the result in result
+#define LIVESCAN_READ_MMCE 6 // Only read mmceman from mmcePath into IOP RAM, which doesn't pause the controller, the result in result
 
 // stage: what gamescan.irx is doing, shown while scanning
 #define LIVESCAN_STAGE_IDLE 0
@@ -140,6 +141,8 @@ typedef struct {
   char coverName[LIVESCAN_COVER_NAME_LEN];
   char coverSuffix[LIVESCAN_COVER_SUFFIX_LEN];
   volatile unsigned int coverCancel;
+  unsigned int mmceReadMs;  // Time it took to read mmceman from the memory card
+  unsigned int mmceStartMs; // Time it took to start mmceman (with the SIO2 locked), mostly looking for the MMCE devices
 } LiveScanShared;
 
 #endif

@@ -162,7 +162,8 @@ if(NOT PATCHER_HOSD AND LAUNCHER_GAMES_MENU AND LAUNCHER_MMCE)
   irx_to_source("iomanX.irx" irx_source "iomanX_irx" "._irx")
   list(APPEND IRX_SOURCES ${irx_source})
   # mmceman built from a copy of the launcher's submodule without the hook that blocks transfers
-  # to memory card slot 2 (see iop/mmceman_noportblock.cmake)
+  # to memory card slot 2 (see iop/mmceman_noportblock.cmake) and with fewer attempts to find
+  # the MMCE devices (see iop/mmceman_fastprobe.cmake)
   set(MMCEMAN_LS_DIR "${PATCHER_BINARY_DIR}/mmceman_ls")
   set(MMCEMAN_LS_IRX "${MMCEMAN_LS_DIR}/irx/mmceman.irx")
   file(GLOB MMCEMAN_LS_SOURCES "${CMAKE_SOURCE_DIR}/launcher/iop/mmceman/mmceman/src/*" "${CMAKE_SOURCE_DIR}/launcher/iop/mmceman/mmceman/include/*"
@@ -175,8 +176,10 @@ if(NOT PATCHER_HOSD AND LAUNCHER_GAMES_MENU AND LAUNCHER_MMCE)
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/launcher/iop/mmceman/mmceman/include" "${MMCEMAN_LS_DIR}/include"
         COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/launcher/iop/mmceman/mmceman/Makefile" "${MMCEMAN_LS_DIR}/Makefile"
         COMMAND ${CMAKE_COMMAND} -DFILE=${MMCEMAN_LS_DIR}/src/sio2man_hook.c -P "${PATCHER_SOURCE_DIR}/iop/mmceman_noportblock.cmake"
+        COMMAND ${CMAKE_COMMAND} -DFILE=${MMCEMAN_LS_DIR}/src/mmceman.c -P "${PATCHER_SOURCE_DIR}/iop/mmceman_fastprobe.cmake"
         COMMAND ${CMAKE_COMMAND} -E chdir "${MMCEMAN_LS_DIR}" ${CMAKE_MAKE_PROGRAM}
         DEPENDS ${MMCEMAN_LS_SOURCES} "${PATCHER_SOURCE_DIR}/iop/mmceman_noportblock.cmake"
+                "${PATCHER_SOURCE_DIR}/iop/mmceman_fastprobe.cmake"
         COMMENT "Building mmceman for the live scan"
         VERBATIM
     )

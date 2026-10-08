@@ -33,6 +33,8 @@ I_CreateThread
 I_StartThread
 I_ReferThreadStatus
 I_DelayThread
+I_GetSystemTime
+I_SysClock2USec
 thbase_IMPORTS_end
 
 loadcore_IMPORTS_start

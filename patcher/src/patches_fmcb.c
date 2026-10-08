@@ -1426,6 +1426,7 @@ static void pollCovers(int reopened) {
 #define COVER_PREPARE_DONE 3
 static int coverPrepare = COVER_PREPARE_MODULES;
 static int coverPrepareWait = 0;
+static int coverMMCERead = 0; // mmceman was read into IOP RAM in the background
 static int coverPrepareFrames = -1; // Frames gamescan.irx took to start mmceman, for games_button_debug
 static int prepareCovers(int startMMCE) {
   if ((coverPrepare == COVER_PREPARE_DONE) || coverError || (!settings.gamesUseMMCE && !settings.psxUseMMCE))
@@ -1439,13 +1440,21 @@ static int prepareCovers(int startMMCE) {
       coverPrepare = COVER_PREPARE_DONE;
       return 1;
     }
-    // Not yet, or wait for gamescan.irx to finish saving the favorites
-    if (!startMMCE || iopRead(LIVESCAN_FIELD(request)) || (iopRead(LIVESCAN_FIELD(status)) == LIVESCAN_STATUS_BUSY))
+    // Wait for gamescan.irx to finish its request (reading mmceman, saving the favorites)
+    if (iopRead(LIVESCAN_FIELD(request)) || (iopRead(LIVESCAN_FIELD(status)) == LIVESCAN_STATUS_BUSY))
+      return 0;
+    // Before the submenu is opened, mmceman is only read into IOP RAM, which doesn't pause the controller
+    if (!startMMCE && coverMMCERead)
       return 0;
     char mmcePath[] = LIVESCAN_IRX_MMCEMAN;
     mmcePath[2] = (settings.mcSlot == 1) ? '1' : '0';
     iopWriteString(LIVESCAN_FIELD(mmcePath), mmcePath, LIVESCAN_PATH_LEN);
     iopWrite(LIVESCAN_FIELD(status), LIVESCAN_STATUS_IDLE);
+    if (!startMMCE) {
+      iopWrite(LIVESCAN_FIELD(request), LIVESCAN_READ_MMCE);
+      coverMMCERead = 1;
+      return 0;
+    }
     iopWrite(LIVESCAN_FIELD(request), LIVESCAN_PREPARE);
     coverPrepare = COVER_PREPARE_MMCE;
     coverPrepareWait = 0;
@@ -2089,11 +2098,13 @@ void drawNonselectableEntryRight(int X, int Y, uint32_t *color, int alpha, const
         if (settings.gamesCovers) {
           // Two short lines, so they fit next to the cover:
           // "e<module error> st<COVER_STATUS_*> r<bytes read or error> g<game whose cover was read> h<first word of the cover>"
-          // "ld<iomanX ms>/<gamescan ms> p<frames mmceman took to start> m<gamescan.irx found> c<1 when ready> q<request>/<done>"
+          // "ld<iomanX ms>/<gamescan ms> p<frames mmceman took to start> mm<ms reading mmceman>/<ms starting it>
+          // m<gamescan.irx found> c<1 when ready> q<request>/<done>"
           snprintf(debug, sizeof(debug), "e%d st%d r%ld g%d h%lx", coverError, coverStatus,
                    liveScanAddr ? (long)iopRead(LIVESCAN_FIELD(coverResult)) : 0, coverDoneGame, coverHeader);
           DrawNonSelectableItem(settings.enterX, settings.versionY - 54, color, alpha, debug);
-          snprintf(debug, sizeof(debug), "ld%lu/%lu p%d m%d c%d q%lu/%lu", liveScanLoadMs[0], liveScanLoadMs[1], coverPrepareFrames,
+          snprintf(debug, sizeof(debug), "ld%lu/%lu p%d mm%lu/%lu m%d c%d q%lu/%lu", liveScanLoadMs[0], liveScanLoadMs[1], coverPrepareFrames,
+                   liveScanAddr ? iopRead(LIVESCAN_FIELD(mmceReadMs)) : 0, liveScanAddr ? iopRead(LIVESCAN_FIELD(mmceStartMs)) : 0,
                    liveScanAddr != 0, coversReady, coverSeq, liveScanAddr ? iopRead(LIVESCAN_FIELD(coverDone)) : 0);
           DrawNonSelectableItem(settings.enterX, settings.versionY - 36, color, alpha, debug);
         }
