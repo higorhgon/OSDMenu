@@ -280,6 +280,8 @@ static int liveScanLoadFrames = 0; // > 0 while "Loading modules..." is shown, b
 static int liveScanWaitFrames = 0; // > 0 while waiting for gamescan.irx to start after loading it
 static int liveScanLoadResult = 0; // loadLiveScanModules() result
 static int liveScanModulesLoaded = 0; // Modules are only loaded once
+static volatile int liveScanModulesLoading = 0; // Set while a thread loads them, see startModuleLoad()
+static int liveScanStartFailed = 0; // gamescan.irx was loaded but didn't start
 #define LIVESCAN_LOAD_DELAY_FRAMES 3 // Let "Loading modules..." be drawn before OSDSYS blocks on the loads
 #define LIVESCAN_START_FRAMES 180    // ~3 seconds for gamescan.irx to write its structure
 static int liveScanFrames = 0;
@@ -542,7 +544,7 @@ static uint32_t eeCycles(void) {
   return count;
 }
 #define EE_CYCLES_PER_MS 294912
-static uint32_t liveScanLoadMs[2]; // Time OSDSYS was blocked loading iomanX and gamescan.irx
+static uint32_t liveScanLoadMs[2]; // Time it took to load iomanX and gamescan.irx
 
 // Loads live scan module i (0: iomanX, 1: gamescan) from the memory card
 // with OSDSYS's sceSifLoadModule(). Returns its result
@@ -562,7 +564,6 @@ static int loadLiveScanModule(int i) {
 // Loads iomanX and gamescan.irx, which loads mmceman itself. Returns 0 on success, or
 // -(module number * 1000 + error) where module number is 1 for iomanX and 2 for gamescan
 static int loadLiveScanModules(void) {
-  liveScanModulesLoaded = 1;
   for (int i = 0; i < 2; i++) {
     uint32_t start = eeCycles();
     int ret = loadLiveScanModule(i);
@@ -571,6 +572,50 @@ static int loadLiveScanModules(void) {
       return -((i + 1) * 1000 - ret);
   }
   return 0;
+}
+
+// sceSifLoadModule() waits for the IOP, so the modules are loaded by a thread with a lower priority than OSDSYS's,
+// which keeps drawing the menu and reading the controller meanwhile
+#define MODULE_THREAD_STACK_SIZE 0x2000
+static uint8_t moduleThreadStack[MODULE_THREAD_STACK_SIZE] __attribute__((aligned(16)));
+extern void *_gp;
+
+static void moduleLoadThread(void *arg) {
+  liveScanLoadResult = loadLiveScanModules();
+  liveScanModulesLoading = 0;
+  ExitDeleteThread();
+}
+
+// Starts loading the modules, in the background if a thread can be started.
+// They're loaded once liveScanModulesLoading is clear, with the result in liveScanLoadResult
+static void startModuleLoad(void) {
+  liveScanModulesLoaded = 1;
+  ee_thread_status_t status;
+  int priority = 64;
+  if (ReferThreadStatus(GetThreadId(), &status) >= 0)
+    priority = status.current_priority + 1;
+  if (priority > 127)
+    priority = 127;
+
+  ee_thread_t thread;
+  memset(&thread, 0, sizeof(thread));
+  thread.func = moduleLoadThread;
+  thread.stack = moduleThreadStack;
+  thread.stack_size = sizeof(moduleThreadStack);
+  thread.gp_reg = &_gp;
+  thread.initial_priority = priority;
+  liveScanModulesLoading = 1;
+  int tid = CreateThread(&thread);
+  if ((tid >= 0) && (StartThread(tid, NULL) >= 0))
+    return;
+  if (tid >= 0)
+    DeleteThread(tid);
+
+  // OSDSYS stops while the modules are loaded, and the controller with it
+  padMute(PAD_MUTE_READS);
+  liveScanLoadResult = loadLiveScanModules();
+  liveScanModulesLoading = 0;
+  padMute(PAD_MUTE_READS);
 }
 
 // Waits for gamescan.irx to start after loading it, then scans
@@ -1036,12 +1081,13 @@ static int startLiveScan(GamesSubmenu *menu) {
     failLiveScan("Refresh list (live scan: OSDSYS module loader not found)");
     return 1;
   }
-  if (liveScanModulesLoaded) {
+  if (liveScanModulesLoaded && !liveScanModulesLoading && liveScanStartFailed) {
     failLiveScan("Refresh list (live scan: module not found)");
     return 1;
   }
 
-  // Show "Loading modules..." and load them a few frames later, since OSDSYS stops drawing while they load
+  // Show "Loading modules..." and load them a few frames later (unless the covers already did),
+  // since OSDSYS stops drawing while they load if they can't be loaded in the background
   int slot = menu->base + menu->count + 1;
   strcpy(settings.menuItemName[slot], "Loading modules...");
   setMenuEntry(0, slot);
@@ -1060,9 +1106,14 @@ static void pollLiveScan(void) {
   }
 
   if (liveScanLoadFrames) {
-    if (--liveScanLoadFrames)
+    if (--liveScanLoadFrames > 0)
       return;
-    liveScanLoadResult = loadLiveScanModules();
+    liveScanLoadFrames = 1; // Until they're loaded
+    if (!liveScanModulesLoaded)
+      startModuleLoad();
+    if (liveScanModulesLoading)
+      return;
+    liveScanLoadFrames = 0;
     if (liveScanLoadResult < 0) {
       char label[NAME_LEN];
       snprintf(label, sizeof(label), "Refresh list (live scan: load error %d)", liveScanLoadResult);
@@ -1080,8 +1131,10 @@ static void pollLiveScan(void) {
       requestLiveScan(liveScanMenu, liveScanLogPending ? LIVESCAN_LIST : LIVESCAN_SCAN);
       return;
     }
-    if (!--liveScanWaitFrames)
+    if (!--liveScanWaitFrames) {
+      liveScanStartFailed = 1;
       failLiveScan("Refresh list (live scan: loaded, but not started)");
+    }
     return;
   }
 
@@ -1235,29 +1288,31 @@ static int coverModuleReady(void) {
   if (coverError)
     return 0;
   if (coverModuleFrames) {
-    padMute(PAD_MUTE_READS);
+    // gamescan.irx writes its structure once its thread starts
     if (!(coverModuleFrames++ % 15) && (liveScanAddr = locateLiveScan()))
       return 1;
-    if (coverModuleFrames > LIVESCAN_START_FRAMES)
+    if (coverModuleFrames > LIVESCAN_START_FRAMES) {
       coverError = 3;
+      liveScanStartFailed = 1;
+    }
     return 0;
   }
   if (liveScanModulesLoaded) {
-    coverError = 4;
+    if (liveScanModulesLoading)
+      return 0;
+    if (liveScanLoadResult < 0)
+      coverError = 5;
+    else if (liveScanStartFailed)
+      coverError = 4;
+    else
+      coverModuleFrames = 1;
     return 0;
   }
   if (settings.liveScanBoot || !settings.liveScanLoader) {
     coverError = settings.liveScanBoot ? 1 : 2;
     return 0;
   }
-  // OSDSYS stops while the modules are loaded, and the controller with it
-  padMute(PAD_MUTE_READS);
-  if (loadLiveScanModules() < 0) {
-    coverError = 5;
-    return 0;
-  }
-  padMute(PAD_MUTE_READS);
-  coverModuleFrames = 1;
+  startModuleLoad();
   return 0;
 }
 
@@ -1339,13 +1394,14 @@ static void pollCovers(int reopened) {
   coverStatus = COVER_STATUS_REQUESTED;
 }
 
-// Loads gamescan.irx and mmceman as soon as the main menu is shown, while the controller pauses
-// go unnoticed, instead of when a games submenu with covers is first opened.
+// Loads gamescan.irx (in the background) and mmceman as soon as the main menu is shown, instead of when a games
+// submenu with covers is first opened. Starting mmceman pauses the controller for a moment (coverPrepareFrames).
 // Called once per frame while the main menu is shown and no submenu is open
 #define COVER_PRELOAD_MODULES 1 // Loading gamescan.irx, then waiting for it to start
 #define COVER_PRELOAD_MMCE 2    // Waiting for gamescan.irx to start mmceman
 static int coverPreload = COVER_PRELOAD_MODULES; // 0 once done
 static int coverPreloadFrames = 0;
+static int coverPrepareFrames = -1; // Frames gamescan.irx took to start mmceman, for games_button_debug
 static void preloadCovers(void) {
   if (!coverPreload || liveScanActive || coverPending)
     return;
@@ -1374,8 +1430,10 @@ static void preloadCovers(void) {
   // gamescan.irx holds the SIO2 while it starts mmceman, which pauses the controller
   padMute(PAD_MUTE_READS);
   if (iopRead(LIVESCAN_FIELD(mmceLoaded)) || (++coverPreloadFrames > COVER_TIMEOUT_FRAMES) ||
-      (!iopRead(LIVESCAN_FIELD(request)) && (iopRead(LIVESCAN_FIELD(status)) == LIVESCAN_STATUS_DONE)))
+      (!iopRead(LIVESCAN_FIELD(request)) && (iopRead(LIVESCAN_FIELD(status)) == LIVESCAN_STATUS_DONE))) {
     coverPreload = 0;
+    coverPrepareFrames = coverPreloadFrames;
+  }
 }
 #endif
 #endif
@@ -1945,10 +2003,12 @@ void drawNonselectableEntryRight(int X, int Y, uint32_t *color, int alpha, const
 #ifdef LIVESCAN
         if (settings.gamesCovers) {
           // "cov<1 when ready> e<module error> g<game whose cover was read> st<COVER_STATUS_*> r<bytes read or error>
-          // h<first word of the cover> q<request sequence>/<done> m<gamescan.irx found>"
-          snprintf(debug, sizeof(debug), "cov%d e%d g%d st%d r%ld h%lx q%lu/%lu m%d", coversReady, coverError, coverDoneGame, coverStatus,
-                   liveScanAddr ? (long)iopRead(LIVESCAN_FIELD(coverResult)) : 0, coverHeader, coverSeq,
-                   liveScanAddr ? iopRead(LIVESCAN_FIELD(coverDone)) : 0, liveScanAddr != 0);
+          // h<first word of the cover> q<request sequence>/<done> m<gamescan.irx found> ld<iomanX ms>/<gamescan ms>
+          // p<frames mmceman took to start at boot>"
+          snprintf(debug, sizeof(debug), "cov%d e%d g%d st%d r%ld h%lx q%lu/%lu m%d ld%lu/%lu p%d", coversReady, coverError, coverDoneGame,
+                   coverStatus, liveScanAddr ? (long)iopRead(LIVESCAN_FIELD(coverResult)) : 0, coverHeader, coverSeq,
+                   liveScanAddr ? iopRead(LIVESCAN_FIELD(coverDone)) : 0, liveScanAddr != 0, liveScanLoadMs[0], liveScanLoadMs[1],
+                   coverPrepareFrames);
           DrawNonSelectableItem(settings.enterX, settings.versionY - 36, color, alpha, debug);
         }
 #endif

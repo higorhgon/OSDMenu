@@ -166,12 +166,14 @@ Once the cursor stays on a game for about 0.3 seconds, `gamescan.irx` (loaded fr
 named after the title ID it finds in the games cache, from the game's own MMCE device (`<device>:/ART/OSDHUB`) into IOP RAM
 (games without a cover aren't asked for again until the submenu is reopened), pausing the controller for that moment, and it's drawn with
 OSDSYS's own sprite and texture functions, found from the function that draws the button icons, from a texture at the
-end of the video memory. The modules, and `mmceman` with them, are loaded as soon as the main menu is first shown,
-which pauses OSDSYS and the controller briefly at startup instead of when a submenu is first opened.
+end of the video memory. The modules are loaded as soon as the main menu is first shown, by a thread with a lower
+priority than OSDSYS's, so the menu keeps moving and responding meanwhile; `mmceman` is started right after, which
+pauses the controller for a moment (`gamescan.irx` holds the SIO2 while it starts).
 While the controller is paused, OSDSYS is told no button is pressed (and for a few reads after), so the last button
 read before the pause isn't repeated.
 With `games_button_debug = 1`, a second line shows `cov<1 when the functions were found>`, `e<module error>`,
-`g<game whose cover was read>`, `r<bytes read, or error>` and the addresses of the sprite submit (`s`), texture
+`g<game whose cover was read>`, `r<bytes read, or error>`, `ld<iomanX ms>/<gamescan.irx ms>` (module load times),
+`p<frames mmceman took to start>` and the addresses of the sprite submit (`s`), texture
 selection (`t`) and texture upload (`l`) functions.
 
 These options are also read by the **launcher**:
