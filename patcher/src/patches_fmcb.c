@@ -575,9 +575,8 @@ static int loadLiveScanModules(void) {
 }
 
 // sceSifLoadModule() waits for the IOP, so the modules are loaded by a thread with a lower priority than OSDSYS's,
-// which keeps drawing the menu and reading the controller meanwhile
-#define MODULE_THREAD_STACK_SIZE 0x2000
-static uint8_t moduleThreadStack[MODULE_THREAD_STACK_SIZE] __attribute__((aligned(16)));
+// which keeps drawing the menu and reading the controller meanwhile.
+// The patcher's memory is full, so the thread's stack is the diagnostics report buffer, unused unless games_live_scan = 2
 extern void *_gp;
 
 static void moduleLoadThread(void *arg) {
@@ -590,6 +589,11 @@ static void moduleLoadThread(void *arg) {
 // They're loaded once liveScanModulesLoading is clear, with the result in liveScanLoadResult
 static void startModuleLoad(void) {
   liveScanModulesLoaded = 1;
+  void *stack = NULL;
+  int stackSize = 0;
+#ifdef LIVESCAN
+  stack = liveScanReportSpare(&stackSize);
+#endif
   ee_thread_status_t status;
   int priority = 64;
   if (ReferThreadStatus(GetThreadId(), &status) >= 0)
@@ -600,12 +604,12 @@ static void startModuleLoad(void) {
   ee_thread_t thread;
   memset(&thread, 0, sizeof(thread));
   thread.func = moduleLoadThread;
-  thread.stack = moduleThreadStack;
-  thread.stack_size = sizeof(moduleThreadStack);
+  thread.stack = stack;
+  thread.stack_size = stackSize;
   thread.gp_reg = &_gp;
   thread.initial_priority = priority;
   liveScanModulesLoading = 1;
-  int tid = CreateThread(&thread);
+  int tid = stack ? CreateThread(&thread) : -1;
   if ((tid >= 0) && (StartThread(tid, NULL) >= 0))
     return;
   if (tid >= 0)

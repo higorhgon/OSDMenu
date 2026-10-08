@@ -30,6 +30,8 @@ void liveScanReportAppendV(const char *fmt, va_list args);
 
 // Empties the report
 void liveScanReportClear(void);
+// The report buffer while games_live_scan isn't 2, or NULL
+void *liveScanReportSpare(int *size);
 #endif
 
 #ifdef HOSD
