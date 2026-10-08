@@ -176,7 +176,7 @@ if(NOT PATCHER_HOSD AND LAUNCHER_GAMES_MENU AND LAUNCHER_MMCE)
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/launcher/iop/mmceman/mmceman/include" "${MMCEMAN_LS_DIR}/include"
         COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/launcher/iop/mmceman/mmceman/Makefile" "${MMCEMAN_LS_DIR}/Makefile"
         COMMAND ${CMAKE_COMMAND} -DFILE=${MMCEMAN_LS_DIR}/src/sio2man_hook.c -P "${PATCHER_SOURCE_DIR}/iop/mmceman_noportblock.cmake"
-        COMMAND ${CMAKE_COMMAND} -DFILE=${MMCEMAN_LS_DIR}/src/mmceman.c -P "${PATCHER_SOURCE_DIR}/iop/mmceman_fastprobe.cmake"
+        COMMAND ${CMAKE_COMMAND} -DDIR=${MMCEMAN_LS_DIR}/src -P "${PATCHER_SOURCE_DIR}/iop/mmceman_fastprobe.cmake"
         COMMAND ${CMAKE_COMMAND} -E chdir "${MMCEMAN_LS_DIR}" ${CMAKE_MAKE_PROGRAM}
         DEPENDS ${MMCEMAN_LS_SOURCES} "${PATCHER_SOURCE_DIR}/iop/mmceman_noportblock.cmake"
                 "${PATCHER_SOURCE_DIR}/iop/mmceman_fastprobe.cmake"
