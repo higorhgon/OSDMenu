@@ -36,6 +36,8 @@
 #define LIVESCAN_PATH_LEN 32
 #define LIVESCAN_COVER_NAME_LEN 80 // Game name
 #define LIVESCAN_COVER_SUFFIX_LEN 12 // COVER_RAW_*_SUFFIX
+#define LIVESCAN_COVER_CHUNK 4096
+#define LIVESCAN_COVER_CANCELLED -125 // ECANCELED
 
 // status
 #define LIVESCAN_STATUS_IDLE 0
@@ -127,7 +129,9 @@ typedef struct {
   // Game covers (games_covers): the EE sets cachePath, coverIndex, coverName, coverSuffix and coverSeq with LIVESCAN_COVER.
   // The IOP reads mmce0/1:/COVER_RAW_DIR/<title ID of the game in the cache><coverSuffix>, or <coverName><coverSuffix>
   // when the game has no ID, and sets coverDone to coverSeq once coverResult (bytes read into coverAddr,
-  // up to COVER_RAW_MAX_SIZE, or < 0) is set
+  // up to COVER_RAW_MAX_SIZE, or < 0) is set.
+  // It's read LIVESCAN_COVER_CHUNK bytes at a time, handing the SIO2 back in between so the controller keeps being read,
+  // and the EE stops the read by setting coverCancel to coverSeq (coverResult is then LIVESCAN_COVER_CANCELLED)
   volatile unsigned int coverSeq;
   volatile unsigned int coverDone;
   volatile int coverResult;
@@ -135,6 +139,7 @@ typedef struct {
   unsigned int coverIndex;
   char coverName[LIVESCAN_COVER_NAME_LEN];
   char coverSuffix[LIVESCAN_COVER_SUFFIX_LEN];
+  volatile unsigned int coverCancel;
 } LiveScanShared;
 
 #endif

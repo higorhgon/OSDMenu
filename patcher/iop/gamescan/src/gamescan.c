@@ -856,12 +856,39 @@ static void readCover(void) {
   char path[LIVESCAN_COVER_NAME_LEN + LIVESCAN_COVER_SUFFIX_LEN + 24];
   sprintf(path, "mmce%d:/" COVER_RAW_DIR "/%s%s", slot, name, shared.coverSuffix);
   int fd = iomanX_open(path, FIO_O_RDONLY);
-  if (fd < 0)
+  unlockSIO2();
+  if (fd < 0) {
     res = fd;
-  else {
-    res = iomanX_read(fd, coverBuffer, COVER_RAW_MAX_SIZE);
-    iomanX_close(fd);
+    goto out;
   }
+
+  // In chunks, handing the SIO2 back in between so the controller keeps being read,
+  // stopping when the EE moved on to another game
+  int total = 0;
+  while (total < COVER_RAW_MAX_SIZE) {
+    if (shared.coverCancel == shared.coverSeq) {
+      res = LIVESCAN_COVER_CANCELLED;
+      break;
+    }
+    int size = COVER_RAW_MAX_SIZE - total;
+    if (size > LIVESCAN_COVER_CHUNK)
+      size = LIVESCAN_COVER_CHUNK;
+    lockSIO2();
+    int read = iomanX_read(fd, (unsigned char *)coverBuffer + total, size);
+    unlockSIO2();
+    if (read < 0) {
+      res = read;
+      break;
+    }
+    total += read;
+    if (read < size)
+      break;
+    DelayThread(1000); // The controller's turn
+  }
+  if (!res)
+    res = total;
+  lockSIO2();
+  iomanX_close(fd);
 
 out:
   unlockSIO2();

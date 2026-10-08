@@ -1360,12 +1360,17 @@ static void pollCovers(int reopened) {
   }
 
   if (coverPending) {
-    // gamescan.irx holds the SIO2 while it reads the cover, which pauses the controller
-    padMute(PAD_MUTE_READS);
+    // gamescan.irx reads it in chunks, handing the SIO2 back to the controller in between,
+    // and stops when the cursor moves to another game
+    if (selected != coverRequested)
+      iopWrite(LIVESCAN_FIELD(coverCancel), coverSeq);
     if (iopRead(LIVESCAN_FIELD(coverDone)) == coverSeq) {
       coverPending = 0;
       coverDoneGame = coverRequested;
-      if ((int)iopRead(LIVESCAN_FIELD(coverResult)) < 0) {
+      if ((int)iopRead(LIVESCAN_FIELD(coverResult)) == LIVESCAN_COVER_CANCELLED) {
+        coverDoneGame = -1; // Read again once the cursor stays on it
+        coverStatus = COVER_STATUS_NONE;
+      } else if ((int)iopRead(LIVESCAN_FIELD(coverResult)) < 0) {
         if (coverRequested < LIVESCAN_MAX_GAMES)
           coverMissing[coverRequested / 32] |= 1u << (coverRequested % 32);
         coverStatus = COVER_STATUS_NOT_READ;
@@ -1415,7 +1420,7 @@ static void pollCovers(int reopened) {
 
 // Gets gamescan.irx and mmceman ready for the covers. Returns 1 once they are (or can't be), 0 meanwhile.
 // gamescan.irx is loaded in the background as soon as the main menu is shown, but mmceman is only started
-// (startMMCE) behind "Loading covers..." when a games submenu is first opened, since that pauses the controller
+// (startMMCE) behind "Initializing..." when a games submenu is first opened, since that pauses the controller
 #define COVER_PREPARE_MODULES 1 // Loading gamescan.irx, then waiting for it to start
 #define COVER_PREPARE_MMCE 2    // Waiting for gamescan.irx to start mmceman
 #define COVER_PREPARE_DONE 3
@@ -1457,18 +1462,18 @@ static int prepareCovers(int startMMCE) {
   return 0;
 }
 
-// Set while a games submenu shows only "Loading covers..." (as liveScanActive)
+// Set while a games submenu shows only "Initializing..." (as liveScanActive)
 static int coversLoading = 0;
 #define COVERS_LOADING_FRAMES (60 * 15)
 static int coversLoadingFrames = 0;
 
-// Shows only "Loading covers..." in the submenu just opened until the covers can be read
+// Shows only "Initializing..." in the submenu just opened until the covers can be read
 static void startCoversLoading(GamesSubmenu *menu) {
   if (!settings.gamesCovers || !liveScanUsesMMCE(menu) || !menu->count || prepareCovers(0))
     return;
   // In the "< Back" label, which showGamesEntries() writes again
   int slot = menu->base + menu->count;
-  strcpy(settings.menuItemName[slot], "Loading covers...");
+  strcpy(settings.menuItemName[slot], "Initializing...");
   setMenuEntry(0, slot);
   menuInfo->entryCount = 3;
   menuInfo->currentEntry = 2;
@@ -1477,7 +1482,7 @@ static void startCoversLoading(GamesSubmenu *menu) {
   coversLoadingFrames = 0;
 }
 
-// Called once per frame while "Loading covers..." is shown. The games are shown without covers
+// Called once per frame while "Initializing..." is shown. The games are shown without covers
 // if they aren't ready after COVERS_LOADING_FRAMES
 static void pollCoversLoading(void) {
   if (++coversLoadingFrames > COVERS_LOADING_FRAMES)
@@ -2082,13 +2087,14 @@ void drawNonselectableEntryRight(int X, int Y, uint32_t *color, int alpha, const
         DrawNonSelectableItem(settings.enterX, settings.versionY - 18, color, alpha, debug);
 #ifdef LIVESCAN
         if (settings.gamesCovers) {
-          // "cov<1 when ready> e<module error> g<game whose cover was read> st<COVER_STATUS_*> r<bytes read or error>
-          // h<first word of the cover> q<request sequence>/<done> m<gamescan.irx found> ld<iomanX ms>/<gamescan ms>
-          // p<frames mmceman took to start>"
-          snprintf(debug, sizeof(debug), "cov%d e%d g%d st%d r%ld h%lx q%lu/%lu m%d ld%lu/%lu p%d", coversReady, coverError, coverDoneGame,
-                   coverStatus, liveScanAddr ? (long)iopRead(LIVESCAN_FIELD(coverResult)) : 0, coverHeader, coverSeq,
-                   liveScanAddr ? iopRead(LIVESCAN_FIELD(coverDone)) : 0, liveScanAddr != 0, liveScanLoadMs[0], liveScanLoadMs[1],
-                   coverPrepareFrames);
+          // Two short lines, so they fit next to the cover:
+          // "e<module error> st<COVER_STATUS_*> r<bytes read or error> g<game whose cover was read> h<first word of the cover>"
+          // "ld<iomanX ms>/<gamescan ms> p<frames mmceman took to start> m<gamescan.irx found> c<1 when ready> q<request>/<done>"
+          snprintf(debug, sizeof(debug), "e%d st%d r%ld g%d h%lx", coverError, coverStatus,
+                   liveScanAddr ? (long)iopRead(LIVESCAN_FIELD(coverResult)) : 0, coverDoneGame, coverHeader);
+          DrawNonSelectableItem(settings.enterX, settings.versionY - 54, color, alpha, debug);
+          snprintf(debug, sizeof(debug), "ld%lu/%lu p%d m%d c%d q%lu/%lu", liveScanLoadMs[0], liveScanLoadMs[1], coverPrepareFrames,
+                   liveScanAddr != 0, coversReady, coverSeq, liveScanAddr ? iopRead(LIVESCAN_FIELD(coverDone)) : 0);
           DrawNonSelectableItem(settings.enterX, settings.versionY - 36, color, alpha, debug);
         }
 #endif
